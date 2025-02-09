@@ -1,9 +1,11 @@
+#pragma once
+
 #ifndef MATRIX_H_
 #define MATRIX_H_
 
 #include <stddef.h>
 #include <stdint.h>
-#include "region.h"
+#include "../region/region.h"
 #include <stdio.h>
 
 #ifndef MAT_ASSERT
@@ -34,10 +36,10 @@ void matrix_rand(Matrix m, float low, float high);
 Row matrix_row(Matrix m, size_t row);
 void matrix_print(Matrix m, const char *name, size_t padding);
 void matrix_shuffle_rows(Matrix m);
-bool matrices_equal(Matrix a, Matrix b);
+//bool matrices_equal(Matrix a, Matrix b);
 int matrix_argmax(Matrix *m);
-void matrix_save(Matrix *m, char* file_string);
-Matrix *matrix_load(char* file_string);
+void matrix_save(Matrix *m, const char *file_string);
+Matrix *matrix_load(Region *r, const char *file_string);
 
 
 #define row_alloc(r, cols) matrix_row(matrix_alloc(r, 1, cols), 0)
@@ -75,9 +77,9 @@ Row matrix_row(Matrix m, size_t row) {
 }
 
 void matrix_copy(Matrix destination, Matrix source) {
-    if (matrices_equal(destination, source)) {
-        return;
-    }
+    //if (matrices_equal(destination, source)) {
+    //    return;
+    //}
     MAT_ASSERT(destination.rows == source.rows);
     MAT_ASSERT(destination.cols == source.cols);
     for (size_t i = 0; i < destination.rows; i++) {
@@ -120,10 +122,10 @@ void matrix_rand(Matrix m, float low, float high) {
 }
 
 void matrix_shuffle_rows(Matrix m) {
-    for (size_t i = 0; i < m.rows; i++) {
+    for (size_t i = 0; i < m.rows; ++i) {
         size_t j = i + rand() % (m.rows - i);
         if (i != j) {
-            for (size_t k = 0; k < m.cols; k++) {
+            for (size_t k = 0; k < m.cols; ++k) {
                 float temp = MAT_AT(m, i, k);
                 MAT_AT(m, i, k) = MAT_AT(m, j, k);
                 MAT_AT(m, j, k) = temp;
@@ -148,8 +150,8 @@ int matrix_argmax(Matrix *m) {
 
 void matrix_save(Matrix *m, const char *file_string) {
     FILE *file = fopen(file_string, "w");
-    fprintf(file, "%d\n", m->rows);
-    fprintf(file, "%d\n", m->cols);
+    fprintf(file, "%zu\n", m->rows);
+    fprintf(file, "%zu\n", m->cols);
     for (size_t i = 0; i < m->rows; i++) {
         for (size_t j = 0; j < m->cols; j++) {
             fprintf(file, "%.f\n", MAT_AT(*m, i, j));

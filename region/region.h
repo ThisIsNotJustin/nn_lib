@@ -1,3 +1,5 @@
+#pragma once
+
 #ifndef REGION_H_
 #define REGION_H_
 
@@ -39,7 +41,7 @@ Region region_init(size_t capacity_bytes) {
     void *words = REGION_MALLOC(capacity_words * word_size);
     REGION_ASSERT(words != NULL);
     r.capacity = capacity_words;
-    r.words = (uintptr_t *) words;
+    r.words = words;
     return r;
 }
 
@@ -48,6 +50,8 @@ void *region_alloc(Region *r, size_t size_bytes) {
     size_t word_size = sizeof(*r->words);
     size_t size_words = (size_bytes + word_size - 1) / word_size;
 
+    printf("region_alloc: size_bytes=%zu, size_words=%zu, r->size=%zu, r->capacity=%zu\n",
+            size_bytes, size_words, r->size, r->capacity);
     REGION_ASSERT(r->size + size_words <= r->capacity);
     if (r->size + size_words > r->capacity) return NULL;
     void *result = &r->words[r->size];

@@ -1,7 +1,10 @@
+#pragma once
+
 #ifndef LA_H_
 #define LA_H_
 
-#include "matrix.h"
+#include "../matrix/matrix.h"
+#include <math.h>
 
 float matrix_mean(Matrix m);
 void matrix_reshape(Matrix dst, Matrix a, size_t new_rows, size_t new_cols);
@@ -44,9 +47,9 @@ void matrix_dot(Matrix dst, Matrix a, Matrix b) {
 
   for (size_t i = 0; i < dst.rows; i++) {
     for (size_t j = 0; j < dst.cols; j++) {
-      MAT_AT(dst, i ,j) = 0;
-      for (size_t k = 0; k < n; k++) {
-	MAT_AT(dst, i , j) += MAT_AT(a, i, k) * MAT_AT(b, k, j);
+      MAT_AT(dst, i, j) = 0;
+      for (size_t k = 0; k < c; k++) {
+	      MAT_AT(dst, i , j) += MAT_AT(a, i, k) * MAT_AT(b, k, j);
       }
     }
   }
