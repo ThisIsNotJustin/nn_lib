@@ -23,15 +23,15 @@ int main(void) {
 
     size_t arch[] = {2, 2, 1};
     NN nn = nn_alloc(&r, arch, 3);
+    NNConfig config = {
+        .loss = BCE,
+        .act = SIG
+    };
     nn_rand(nn, -0.5, 0.5);
     
     float learning_rate = 0.1f;
     size_t epochs = 30000;
     size_t batch_size = 2;
-    NNConfig config = {
-        .loss = BCE,
-        .act = SIG
-    };
     
     // Training
     Batch batch = {0};

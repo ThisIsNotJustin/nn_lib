@@ -153,7 +153,7 @@ int main() {
   Matrix train_data = load_mnist(&perm, TRAIN_IMAGE, TRAIN_LABEL, 60000);
   printf("Loaded %zu training samples\n", train_data.rows);
 
-  float lr = 0.01f;
+  float lr = 0.1f;
   size_t epochs = 50;
   Batch batch = {0};
   NNConfig config = {
