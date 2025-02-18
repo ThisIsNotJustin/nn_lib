@@ -52,6 +52,44 @@ typedef struct {
 } NNConfig;
 
 typedef struct {
+  size_t layers;
+  size_t *arch;
+  size_t att_heads;
+  size_t *ff_arch;
+} TConfig;
+
+typedef struct {
+  Matrix *Wq;
+  Matrix *Wk;
+  Matrix *Wv;
+  Matrix *Wo;
+  size_t att_heads;
+  size_t *arch;
+  size_t arch_count;
+} AttentionHead;
+
+typedef struct {
+  Matrix *W1;
+  Row *b1;
+  Matrix *W2;
+  Row *b2;
+} FeedForward;
+
+typedef struct {
+  AttentionHead att;
+  FeedForward ff;
+  Matrix *norm1;
+  Matrix *norm2;
+} TransformerLayer;
+
+typedef struct {
+  TransformerLayer *layers;
+  size_t layers;
+  Matrix *encode;
+  size_t *arch;
+} Transformer;
+
+typedef struct {
     size_t begin;
     float cost;
     bool finished;

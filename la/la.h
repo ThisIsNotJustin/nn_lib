@@ -15,6 +15,7 @@ void matrix_subtract(Matrix a, Matrix b);
 void matrix_scale(Matrix m, float n);
 void matrix_add_scalar(Matrix m, float n);
 float matrix_fnorm(Matrix m);
+Matrix* scaled_dot_product(Matrix *Q, Matrix *K, Matrix *V);
 
 // TODO:
 // void matrix_flatten(Matrix dst, Matrix a);
@@ -123,6 +124,34 @@ float matrix_fnorm(Matrix m) {
   }
 
   return sqrt(sum);
+}
+
+Matrix* scaled_dot_product(Matrix *Q, Matrix *K, Matrix *V) {
+  MAT_ASSERT(Q->cols == K->cols);
+  MAT_ASSERT(K->rows == V->rows);
+
+  size_t m = Q->rows;
+  size_t n = K->rows;
+  size_t d_k = Q->cols;
+
+  Matrix K_T = matrix_alloc(NULL, K->cols, K->rows);
+  matrix_transpose(K_T, *K);
+  Matrix scores = matrix_alloc(NULL, m, n);
+  matrix_dot(scores, *Q, K_T);
+
+  float scale = 1.0f / sqrtf((float)d_k);
+  matrix_scale(scores, scale);
+
+  softmax(scores);
+
+  Matrix *res = malloc(sizeof(Matrix));
+  *res = matrix_alloc(NULL, m, V->cols);
+  matrix_dot(*res, scores *V);
+
+  free(K_T.elements);
+  free(scores.elements);
+
+  return res;
 }
 
 #endif // LA_IMPLEMENTATION
