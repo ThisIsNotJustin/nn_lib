@@ -174,14 +174,14 @@ Matrix *matrix_load(Region *r, const char *file_string) {
         fclose(file);
         return NULL;
     }
-    int rows = atoi(entry);
+    size_t rows = atoi(entry);
 
     if (!fgets(entry, sizeof(entry), file)) {
         printf("Failed to read cols from file %s\n", file_string);
         fclose(file);
         return NULL;
     }
-    int cols = atoi(entry);
+    size_t cols = atoi(entry);
 
     Matrix *m = (Matrix *) region_alloc(r, sizeof(Matrix));
     if (!m) {

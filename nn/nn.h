@@ -83,7 +83,7 @@ typedef struct {
 } TransformerLayer;
 
 typedef struct {
-  TransformerLayer *layers;
+  TransformerLayer *tlayers;
   size_t layers;
   Matrix *encode;
   size_t *arch;
@@ -237,6 +237,7 @@ NN nn_backprop(Region *r, NN n, Matrix m, NNConfig config) {
   return res;
 }
 
+/*
 NN nn_finite_diff(Region *r, NN n, Matrix m, float eps) {
   float saved;
   // need loss float c = nn_cost(n, m);
@@ -266,6 +267,7 @@ NN nn_finite_diff(Region *r, NN n, Matrix m, float eps) {
   printf("Finite differences computed.\n");
   return res;
 }
+*/
 
 void nn_zero_grad(NN n) {
   for (size_t i = 0; i < n.arch_count - 1; i++) {

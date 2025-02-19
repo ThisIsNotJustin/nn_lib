@@ -4,6 +4,7 @@
 #define LA_H_
 
 #include "../matrix/matrix.h"
+#include "../nn/nn.h"
 #include <math.h>
 
 float matrix_mean(Matrix m);
@@ -15,7 +16,9 @@ void matrix_subtract(Matrix a, Matrix b);
 void matrix_scale(Matrix m, float n);
 void matrix_add_scalar(Matrix m, float n);
 float matrix_fnorm(Matrix m);
-Matrix* scaled_dot_product(Matrix *Q, Matrix *K, Matrix *V);
+Matrix scaled_dot_product(Region *r, Matrix *Q, Matrix *K, Matrix *V);
+
+void softmax(Matrix m);
 
 // TODO:
 // void matrix_flatten(Matrix dst, Matrix a);
@@ -126,7 +129,7 @@ float matrix_fnorm(Matrix m) {
   return sqrt(sum);
 }
 
-Matrix* scaled_dot_product(Matrix *Q, Matrix *K, Matrix *V) {
+Matrix scaled_dot_product(Region *r, Matrix *Q, Matrix *K, Matrix *V) {
   MAT_ASSERT(Q->cols == K->cols);
   MAT_ASSERT(K->rows == V->rows);
 
@@ -134,9 +137,9 @@ Matrix* scaled_dot_product(Matrix *Q, Matrix *K, Matrix *V) {
   size_t n = K->rows;
   size_t d_k = Q->cols;
 
-  Matrix K_T = matrix_alloc(NULL, K->cols, K->rows);
+  Matrix K_T = matrix_alloc(r, K->cols, K->rows);
   matrix_transpose(K_T, *K);
-  Matrix scores = matrix_alloc(NULL, m, n);
+  Matrix scores = matrix_alloc(r, m, n);
   matrix_dot(scores, *Q, K_T);
 
   float scale = 1.0f / sqrtf((float)d_k);
@@ -144,14 +147,42 @@ Matrix* scaled_dot_product(Matrix *Q, Matrix *K, Matrix *V) {
 
   softmax(scores);
 
-  Matrix *res = malloc(sizeof(Matrix));
-  *res = matrix_alloc(NULL, m, V->cols);
-  matrix_dot(*res, scores *V);
+  Matrix res = matrix_alloc(r, m, V->cols);
+  res = matrix_alloc(NULL, m, V->cols);
+  matrix_dot(res, scores, *V);
 
   free(K_T.elements);
   free(scores.elements);
 
   return res;
+}
+
+// something about cache locality
+// dividing the matrix in to smaller blocks (16x16)
+// same big-o time complexity but reuses mlmm
+// dst matrix is overwritten so keep that in mind
+void matrix_mul(Matrix *dst, Matrix *m, Matrix *n) {
+  for (size_t i = 0; i < m->rows; i++) {
+    for (size_t j = 0; j < n->cols; j++) {
+      dst->elements[i * n->cols + j] = 0.0f;
+    }
+  }
+
+  const size_t block_size = 16;
+  for (size_t i = 0; i < m->rows; i += block_size) {
+    for (size_t k = 0; k < m->cols; k += block_size) {
+      for (size_t j = 0; j < n->cols; j += block_size) {
+        for (size_t l = i; l < i + block_size && l < m->rows; l++) {
+          for (size_t mm = k; mm < k + block_size && mm < m->cols; mm++) {
+            const float mlmm = m->elements[l * m->cols + mm];
+            for (size_t nn = j; nn < j + block_size && nn < n->cols; nn++) {
+              dst->elements[l * n->cols + nn] += mlmm * n->elements[mm * n->cols + nn];
+            }
+          }
+        }
+      }
+    }
+  }
 }
 
 #endif // LA_IMPLEMENTATION
