@@ -1,5 +1,24 @@
 #pragma once
 
+/*
+  TODO: 
+    Ensure transformers work well with larger datasets
+    I believe we are missing a backprop method for transformers?
+    How did you mess that up??
+
+    Refactor code for better performance with pointers and
+    references when possible
+
+    Refactor structs and functions to be more easily reused
+    At the moment we have feed forward and transformer
+    yet transformers need their own feed forward logic??
+    We need common ground for the code
+
+    I'd imagine implementing convolutional neural nets
+    in this current style would quite literally double the codebase
+    this needs fixed
+*/
+
 #ifndef NN_H_
 #define NN_H_
 
