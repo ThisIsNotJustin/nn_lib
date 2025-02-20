@@ -1,6 +1,12 @@
 # Neural Network Library
 
-Written for recreational programming purposes. 
+Written for recreational programming purposes. This is only a cool little project for learning how Neural Networks and libraries like PyTorch/Tensorflow actually work. 
+
+### Pros:
+* Small library written in C
+
+### Cons:
+* Small library written in C
 
 ### Example Output of simple Transformer Model
 The model in this test case had 3 transformer layers with 1 attention head
@@ -49,4 +55,26 @@ Testing XOR:
 0 XOR 1 = 0.996128
 1 XOR 0 = 0.994307
 1 XOR 1 = 0.003592
+```
+
+## Building
+### Transformer Test
+``` bash 
+make ttest
+```
+### MNIST Test
+``` bash 
+make mnist
+```
+### XOR Test
+``` bash 
+make xor
+```
+### All
+``` bash 
+make all
+```
+### Cleanup
+``` bash 
+make clean
 ```
