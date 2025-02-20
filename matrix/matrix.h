@@ -141,7 +141,7 @@ void matrix_print(Matrix m, const char *name, size_t padding) {
         }
         printf("\n");
     }
-    printf("%*s = ]\n", (int) padding, "");
+    printf("%*s ]\n", (int) padding, "");
 }
 
 /*
@@ -247,7 +247,7 @@ void matrix_save(Matrix *m, const char *file_string) {
             fprintf(file, "%.f\n", MAT_AT(*m, i, j));
         }
     }
-    
+
     fclose(file);
     printf("Successfully saved matrix to %s\n", file_string);
 }
