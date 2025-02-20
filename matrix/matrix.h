@@ -56,6 +56,18 @@ Row row_slice(Row row, size_t i, size_t cols);
 
 #ifdef MATRIX_IMPLEMENTATION
 
+/*
+    Matrix allocation from memory region
+    
+    Parameters:
+        r - Memory region for allocation
+        rows - Number of rows (minimum 1)
+        cols - Number of columns (minimum 1)
+    
+    Returns:
+        Initialized Matrix structure with contiguous memory
+        Elements are uninitialized by default
+*/
 Matrix matrix_alloc(Region *r, size_t rows, size_t cols) {
     if (rows < 1) rows = 1;
     if (cols < 1) cols = 1;
@@ -68,7 +80,19 @@ Matrix matrix_alloc(Region *r, size_t rows, size_t cols) {
     return m;
 }
 
-
+/*
+    Get row view of matrix
+    
+    Parameters:
+        m - Source matrix
+        row - Row index
+    
+    Returns:
+        Row structure 
+    
+    Preconditions:
+        row < m.rows
+*/
 Row matrix_row(Matrix m, size_t row) {
     return (Row) {
         .cols = m.cols,
@@ -76,6 +100,17 @@ Row matrix_row(Matrix m, size_t row) {
     };
 }
 
+/*
+    Deep copy matrix contents
+    
+    Parameters:
+        destination - Target matrix 
+        source - Source matrix to copy from
+    
+    Preconditions:
+        destination.rows == source.rows
+        destination.cols == source.cols
+*/
 void matrix_copy(Matrix destination, Matrix source) {
     //if (matrices_equal(destination, source)) {
     //    return;
@@ -89,6 +124,14 @@ void matrix_copy(Matrix destination, Matrix source) {
     }
 }
 
+/*
+    Print matrix contents with stdout
+    
+    Parameters:
+        m - Matrix to print
+        name - Label to display above matrix
+        padding - Left-pad output with spaces
+*/
 void matrix_print(Matrix m, const char *name, size_t padding) {
     printf("%*s%s = [\n", (int) padding, "", name);
     for (size_t i = 0; i < m.rows; i++) {
@@ -101,6 +144,13 @@ void matrix_print(Matrix m, const char *name, size_t padding) {
     printf("%*s = ]\n", (int) padding, "");
 }
 
+/*
+    Fill matrix with given value
+    
+    Parameters:
+        m - Matrix to modify
+        val - Value to set all elements to
+*/
 void matrix_fill(Matrix m, float val) {
     for (size_t i = 0; i < m.rows; i++) {
         for (size_t j = 0; j < m.cols; j++) {
@@ -113,6 +163,14 @@ float rand_float(void) {
     return (float) rand() / (float) RAND_MAX;
 }
 
+/*
+    Initialize matrix with random values
+    
+    Parameters:
+        m - Matrix to initialize with random values
+        low - Minimum value (inclusive)
+        high - Maximum value (exclusive)
+*/
 void matrix_rand(Matrix m, float low, float high) {
     for (size_t i = 0; i < m.rows; i++) {
         for (size_t j = 0; j < m.cols; j++) {
@@ -121,6 +179,16 @@ void matrix_rand(Matrix m, float low, float high) {
     }
 }
 
+/*
+    Randomly shuffle rows of Matrix
+    
+    Parameters:
+        m - Matrix to shuffle
+    
+    Notes:
+        Implements Fisher-Yates shuffle
+        Affects row order but preserves row contents
+*/
 void matrix_shuffle_rows(Matrix m) {
     for (size_t i = 0; i < m.rows; ++i) {
         size_t j = i + rand() % (m.rows - i);
@@ -134,6 +202,16 @@ void matrix_shuffle_rows(Matrix m) {
     }
 }
 
+/*
+    Find maximum value index
+    
+    Parameters:
+        m - Input matrix
+    
+    Returns:
+        Linear index of maximum element
+        Returns first occurrence for multiple maxima
+*/
 int matrix_argmax(Matrix *m) {
     int max_index = 0;
     float max_val = m->elements[0];
@@ -148,6 +226,18 @@ int matrix_argmax(Matrix *m) {
     return max_index;
 }
 
+/*
+    Save matrix to file
+    
+    Parameters:
+        m - Matrix to serialize
+        file_string - Output file path
+    
+    File Format:
+        First line: rows
+        Second line: cols
+        Subsequent lines: elements in row-major order
+*/
 void matrix_save(Matrix *m, const char *file_string) {
     FILE *file = fopen(file_string, "w");
     fprintf(file, "%zu\n", m->rows);
@@ -157,11 +247,27 @@ void matrix_save(Matrix *m, const char *file_string) {
             fprintf(file, "%.f\n", MAT_AT(*m, i, j));
         }
     }
+    
     fclose(file);
     printf("Successfully saved matrix to %s\n", file_string);
 }
 
-Matrix *matrix_load(Region *r, const char *file_string) {
+/*
+    Load matrix from file
+    
+    Parameters:
+        r - Memory region for allocation
+        file_string - Input file path
+    
+    Returns:
+        Pointer to loaded matrix on success
+        NULL on failure
+    
+    Notes:
+        File format must match matrix_save()
+        Allocates from region
+*/
+Matrix* matrix_load(Region *r, const char *file_string) {
     FILE *file = fopen(file_string, "r");
     if (!file) {
         printf("Could not open file %s\n", file_string);
@@ -208,6 +314,15 @@ Matrix *matrix_load(Region *r, const char *file_string) {
 
 }
 
+/*
+    Convert Row to 1 row Matrix 
+    
+    Parameters:
+        row - Row structure to convert
+    
+    Returns:
+        Matrix structure 
+*/
 Matrix row_as_matrix(Row row) {
     return (Matrix) {
         .rows = 1,
@@ -216,6 +331,21 @@ Matrix row_as_matrix(Row row) {
     };
 }
 
+/*
+    Create smaller, subsection of a Row
+    
+    Parameters:
+        row - Source row
+        i - Starting column index
+        cols - Number of columns in slice
+    
+    Returns:
+        New Row with portion of original
+    
+    Preconditions:
+        i < row.cols
+        i + cols <= row.cols
+*/
 Row row_slice(Row row, size_t i, size_t cols) {
     MAT_ASSERT(i < row.cols);
     MAT_ASSERT(i + cols <= row.cols);

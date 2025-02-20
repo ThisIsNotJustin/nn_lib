@@ -32,6 +32,15 @@ void softmax(Matrix m);
 
 #ifdef LA_IMPLEMENTATION
 
+/*
+  Calculates the mean of matrix elements
+    
+  Parameters:
+    m - Input matrix
+    
+  Returns:
+    Mean of all elements as float
+*/
 float matrix_mean(Matrix m) {
   float sum = 0.0f;
   for (size_t i = 0; i < m.rows; i++) {
@@ -43,6 +52,18 @@ float matrix_mean(Matrix m) {
   return sum / (m.rows * m.cols);
 }
 
+/*
+  Computes matrix dot product
+    
+  Parameters:
+    dst - Destination matrix
+    a - Left operand matrix
+    b - Right operand matrix
+    
+  Preconditions:
+    a.cols == b.rows
+    dst.rows == a.rows && dst.cols == b.cols
+*/
 void matrix_dot(Matrix dst, Matrix a, Matrix b) {
   MAT_ASSERT(a.cols == b.rows);
   size_t c = a.cols;
@@ -60,6 +81,13 @@ void matrix_dot(Matrix dst, Matrix a, Matrix b) {
   
 }
 
+/*
+  Scales matrix elements by a factor, n
+    
+  Parameters:
+    m - Matrix being scaled
+    n - Scalar multiplier
+*/
 void matrix_scale(Matrix m, float n) {
   for (size_t i = 0; i < m.rows; i++) {
     for (size_t j = 0; j < m.cols; j++) {
@@ -68,6 +96,13 @@ void matrix_scale(Matrix m, float n) {
   }
 }
 
+/*
+  Adds a scalar value to all matrix elements
+    
+  Parameters:
+    m - Matrix being modified
+    n - Scalar value
+*/
 void matrix_add_scalar(Matrix m, float n) {
   for (size_t i = 0; i < m.rows; i++) {
     for (size_t j = 0; j < m.cols; j++) {
@@ -76,6 +111,16 @@ void matrix_add_scalar(Matrix m, float n) {
   }
 }
 
+/*
+  Performs in-place matrix addition
+    
+  Parameters:
+    a - Matrix being modified
+    b - Matrix to add by
+    
+  Preconditions:
+    a.rows == b.rows && a.cols == b.cols
+*/
 void matrix_add(Matrix a, Matrix b) {
   MAT_ASSERT(a.rows == b.rows);
   MAT_ASSERT(a.cols == b.cols);
@@ -87,6 +132,16 @@ void matrix_add(Matrix a, Matrix b) {
   }
 }
 
+/*
+  Performs in-place matrix subtraction
+    
+  Parameters:
+    a - Matrix to modify
+    b - Matrix to subtract by
+    
+  Preconditions:
+    a.rows == b.rows && a.cols == b.cols
+*/
 void matrix_subtract(Matrix a, Matrix b) {
   MAT_ASSERT(a.rows == b.rows);
   MAT_ASSERT(a.cols == b.cols);
@@ -98,6 +153,18 @@ void matrix_subtract(Matrix a, Matrix b) {
   }
 }
 
+/*
+    Reshapes matrix to new dimensions
+    
+    Parameters:
+        dst - Destination matrix (must be preallocated)
+        a - Source matrix to reshape
+        new_rows - Target row count for reshaped matrix
+        new_cols - Target column count for reshaped matrix
+    
+    Preconditions:
+      dst.rows == new_rows && dst.cols == new_cols
+*/
 void matrix_reshape(Matrix dst, Matrix a, size_t new_rows, size_t new_cols) {
   MAT_ASSERT(dst.rows == new_rows);
   MAT_ASSERT(dst.cols == new_cols);
@@ -107,6 +174,16 @@ void matrix_reshape(Matrix dst, Matrix a, size_t new_rows, size_t new_cols) {
   }
 }
 
+/*
+  Transposes matrix dimensions
+    
+  Parameters:
+    dst - Destination matrix (must be preallocated)
+    a - Source matrix to transpose
+    
+  Preconditions:
+    dst.rows == a.cols && dst.cols == a.rows
+*/
 void matrix_transpose(Matrix dst, Matrix a) {
   MAT_ASSERT(dst.rows == a.cols);
   MAT_ASSERT(dst.cols == a.rows);
@@ -118,6 +195,15 @@ void matrix_transpose(Matrix dst, Matrix a) {
   }
 }
 
+/*
+  Computes fnorm of matrix
+    
+  Parameters:
+    m - Input matrix
+    
+  Returns:
+    Square root of sum of squared elements
+*/
 float matrix_fnorm(Matrix m) {
   float sum = 0.0f;
   for (size_t i = 0; i < m.rows; i++) {
@@ -129,6 +215,19 @@ float matrix_fnorm(Matrix m) {
   return sqrt(sum);
 }
 
+/*
+  Transformer Scaled Dot-Product Attention
+
+  attention(Q, K, V) = softmax(QKT/sqrt(dk)) V 
+    
+  Parameters:
+    Requires a Region due to allocating more memory for temporary
+    and resultant matrices
+    Matrix Q - Queries, K - Keys, and V - Values
+
+  Returns:
+    new Matrix of softmax(QKT/sqrt(dk)) V 
+*/
 Matrix scaled_dot_product(Region *r, Matrix *Q, Matrix *K, Matrix *V) {
   MAT_ASSERT(Q->cols == K->cols);
   MAT_ASSERT(K->rows == V->rows);
@@ -137,6 +236,9 @@ Matrix scaled_dot_product(Region *r, Matrix *Q, Matrix *K, Matrix *V) {
   size_t n = K->rows;
   size_t d_k = Q->cols;
 
+  // should we overwrite the memory region of K for K_T
+  // and Q for scores
+  // rather than allocating more memory within this function?
   Matrix K_T = matrix_alloc(r, K->cols, K->rows);
   matrix_transpose(K_T, *K);
   Matrix scores = matrix_alloc(r, m, n);
@@ -147,20 +249,27 @@ Matrix scaled_dot_product(Region *r, Matrix *Q, Matrix *K, Matrix *V) {
 
   softmax(scores);
 
+  // again should memory simply be overwritten rather
+  // than allocating more??
   Matrix res = matrix_alloc(r, m, V->cols);
-  res = matrix_alloc(NULL, m, V->cols);
   matrix_dot(res, scores, *V);
-
-  free(K_T.elements);
-  free(scores.elements);
 
   return res;
 }
 
-// something about cache locality
-// dividing the matrix in to smaller blocks (16x16)
-// same big-o time complexity but reuses mlmm
-// dst matrix is overwritten so keep that in mind
+/*
+  something about cache locality
+  dividing the matrix in to smaller blocks (16x16)
+  same big-o time complexity but reuses mlmm variable
+  dst matrix is overwritten so keep that in mind
+
+  Parameters:
+    Matrix *dst - destination Matrix, Matrix *m - Matrix 1
+    Matrix *n - Matrix 2
+
+  Accepts a destination Matrix rather than returning a new Matrix
+
+*/
 void matrix_mul(Matrix *dst, Matrix *m, Matrix *n) {
   for (size_t i = 0; i < m->rows; i++) {
     for (size_t j = 0; j < n->cols; j++) {
