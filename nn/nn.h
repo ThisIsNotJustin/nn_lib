@@ -23,7 +23,17 @@
 #define NN_ACT LEAKY_RELU
 #endif // NN_ACT
 
+/*
+  Basic Neural Network Structure
+  Contains achitecture dimensions, weights, biases, and activations
 
+  Fields:
+    arch - array for the dimensions (ie 784, 64, 32, 10)
+    arch_count - num layers in the neural network
+    ws - Matrix of Weights
+    bs - Row Vector of biases per layer
+    as - Row Vector of activations per layer
+*/
 typedef struct {
     size_t *arch;
     size_t arch_count;
@@ -32,6 +42,15 @@ typedef struct {
     Row *as;
 } NN;
 
+/*
+  Activation Function Enum
+  Supported Activations:
+    SIG - Sigmoid
+    RELU - Rectified Linear Unit
+    TANH - Hyperbolic Tangent
+    LEAKY_RELU - Prevent Dying ReLU
+    SOFTMAX - Softmax for output layers
+*/
 typedef enum {
     SIG,
     RELU,
@@ -40,17 +59,41 @@ typedef enum {
     SOFTMAX
 } Activation;
 
+/*
+  Loss Function Enum
+  Supported Loss Functions:
+    MSE - Mean Squared Error
+    BCE - Binary Cross Entropy
+    CCE - Categorical Cross Entropy
+*/
 typedef enum {
   MSE,
   BCE,
   CCE
 } Loss;
 
+/*
+  Neural Network Config
+  Contains both Activation and Loss Enums
+
+  Fields:
+    act - Activation function for hidden layers
+    loss - Loss function for training
+*/
 typedef struct {
   Activation act;
   Loss loss;
 } NNConfig;
 
+/*
+  Transformer Config
+  This and all other transformer aspects are a work 
+  in progress. Currently unused
+
+  Fields:
+    act - Activation function for hidden layers
+    loss - Loss function for training
+*/
 typedef struct {
   size_t layers;
   size_t *arch;
@@ -58,6 +101,14 @@ typedef struct {
   size_t *ff_arch;
 } TConfig;
 
+/*
+  Multi Attention Head
+
+
+  Fields:
+    act - Activation function for hidden layers
+    loss - Loss function for training
+*/
 typedef struct {
   Matrix *Wq;
   Matrix *Wk;
@@ -140,6 +191,17 @@ void add_bias(Matrix m, Row b);
 
 #ifdef NN_IMPLEMENTATION
 
+/*
+  Allocate neural network from memory region
+    
+  Parameters:
+    r - Memory region for allocation
+    arch - Array defining size of architecture
+    arch_count - Number of layers
+    
+  Returns:
+    Initialized NN structure with allocated matrices
+*/
 NN nn_alloc(Region *r, size_t *arch, size_t arch_count) {
   NN_ASSERT(arch_count > 0);
   NN n;
@@ -162,6 +224,13 @@ NN nn_alloc(Region *r, size_t *arch, size_t arch_count) {
   return n;
 }
 
+/*
+  Perform forward pass through network
+    
+  Parameters:
+    n - Neural Network structure
+    act - Activation function to use
+*/
 void nn_forward(NN n, Activation act) {
   for (size_t i = 0; i < n.arch_count - 1; ++i) {
     matrix_dot(row_as_matrix(n.as[i+1]), row_as_matrix(n.as[i]), n.ws[i]);
@@ -175,6 +244,13 @@ void nn_forward(NN n, Activation act) {
   }
 }
 
+/*
+  Print network architecture and parameters
+    
+  Parameters:
+    n - Neural Network to print
+    name - Label to display
+*/
 void nn_print(NN n, const char *name) {
   char buff[256];
   printf("%s = [\n", name);
@@ -188,6 +264,18 @@ void nn_print(NN n, const char *name) {
   printf("]\n");
 }
 
+/*
+  Backpropagation to compute gradients
+    
+  Parameters:
+    r - Memory region for temporary allocations
+    n - Neural Network to train
+    m - Training data matrix
+    config - Network configuration for activations and loss
+    
+  Returns:
+    NN structure containing computed gradients
+*/
 NN nn_backprop(Region *r, NN n, Matrix m, NNConfig config) {
   size_t n_rows = m.rows;
   NN_ASSERT(NN_INPUT(n).cols + NN_OUTPUT(n).cols == m.cols);
@@ -248,6 +336,11 @@ NN nn_backprop(Region *r, NN n, Matrix m, NNConfig config) {
 }
 
 /*
+  Finite differences function
+  No reason to use outside of learning and testing
+
+  Just use backprop
+  
 NN nn_finite_diff(Region *r, NN n, Matrix m, float eps) {
   float saved;
   // need loss float c = nn_cost(n, m);
@@ -279,6 +372,12 @@ NN nn_finite_diff(Region *r, NN n, Matrix m, float eps) {
 }
 */
 
+/*
+  Set entire Neural Network to 0
+    
+  Parameters:
+    n - Neural Network to set to 0
+*/
 void nn_zero_grad(NN n) {
   for (size_t i = 0; i < n.arch_count - 1; i++) {
     matrix_fill(n.ws[i], 0);
@@ -289,6 +388,14 @@ void nn_zero_grad(NN n) {
   row_fill(n.as[n.arch_count - 1], 0);
 }
 
+/*
+  Update (learn) network parameters using gradients
+    
+  Parameters:
+    n - Neural network to update
+    g - Gradients computed from backprop
+    lr - Learning rate
+*/
 void nn_learn(NN n, NN g, float lr) {
   for (size_t i = 0; i < n.arch_count - 1; ++i) {
     for (size_t j = 0; j < n.ws[i].rows; ++j) {
@@ -304,6 +411,9 @@ void nn_learn(NN n, NN g, float lr) {
 }
 
 /*
+  Older implementation of nn_cost
+  likely need to delete but what if it could be used
+  again?? delulu but rather not delete it
 
 float nn_cost(NN n, Matrix m, Loss loss) {
   NN_ASSERT(NN_INPUT(n).cols + NN_OUTPUT(n).cols == m.cols);
@@ -331,6 +441,17 @@ float nn_cost(NN n, Matrix m, Loss loss) {
 
 */
 
+/*
+  Compute cost over training data
+    
+  Parameters:
+    n - Neural network
+    m - Training data matrix
+    loss - Loss function to use
+    
+  Returns:
+    Computed loss value
+*/
 float nn_cost(NN n, Matrix m, Loss loss) {
   switch (loss) {
     case MSE:
@@ -345,6 +466,16 @@ float nn_cost(NN n, Matrix m, Loss loss) {
   }
 }
 
+/*
+  Compute Mean Squared Error
+    
+  Parameters:
+    n - Neural network
+    m - Matrix of target values
+    
+  Returns:
+    The Mean Squared Error
+*/
 float compute_mse(NN n, Matrix m) {
   float sum = 0.0f;
   for (size_t i = 0; i < m.rows; i++) {
@@ -360,6 +491,16 @@ float compute_mse(NN n, Matrix m) {
   return sum / (m.rows * m.cols);
 }
 
+/*
+  Compute Binary Cross Entropy
+    
+  Parameters:
+    n - Neural network
+    m - Matrix of target values
+    
+  Returns:
+    Binary Cross Entropy
+*/
 float compute_bce(NN n, Matrix m) {
   const float epsilon = 1e-9f;
   float sum = 0.0f;
@@ -377,6 +518,16 @@ float compute_bce(NN n, Matrix m) {
   return -sum / (m.rows * m.cols);
 }
 
+/*
+  Compute Categorical Cross Entropy
+
+  Parameters:
+    n - Neural Network
+    m - Matrix of target values
+
+  Returns:
+    Categorical Cross Entropy
+*/
 float compute_cce(NN n, Matrix m) {
   const float epsilon = 1e-9f;
   float sum = 0.0f;
@@ -395,6 +546,14 @@ float compute_cce(NN n, Matrix m) {
   return -sum / m.rows;
 }
 
+/*
+  Randomize Neural Network Parameters
+
+  Parameters:
+    n - Neural Network
+    l - lower bound for random values
+    h - upper bound for random values
+*/
 void nn_rand(NN n, float l, float h) {
   for (size_t i = 0; i < n.arch_count - 1; ++i) {
     matrix_rand(n.ws[i], l, h);
@@ -402,6 +561,13 @@ void nn_rand(NN n, float l, float h) {
   }
 }
 
+/*
+  Apply activation function to given Matrix
+
+  Parameters:
+    m - Matrix
+    act - Activation function
+*/
 void matrix_act(Matrix m, Activation act) {
   for (size_t i = 0; i < m.rows; ++i) {
     for (size_t j = 0; j < m.cols; ++j) {
@@ -410,22 +576,67 @@ void matrix_act(Matrix m, Activation act) {
   }
 }
 
+/*
+  Sigmoid Activation Function
+    
+  Parameters:
+    x - Input value
+    
+  Returns:
+    Sigmoid(x) = 1 / (1 + exp(-x))
+*/
 float sigmoidf(float x) {
   return 1.f / (1.f + expf(-x));
 }
 
+/*
+  ReLU Activation Function
+
+  Parameters:
+    x - Input value
+
+  Returns ReLU(x) = 0 or x
+*/
 float reluf(float x) {
   return x > 0 ? x : 0;
 }
 
+/*
+  Tanh Activation Function
+
+  Parameters:
+    x - Input value
+
+  Returns:
+    Tanh(x) = (exp(x) - exp(-x)) / (exp(x) + exp(-x))
+*/
 float tanhf(float x) {
   return (expf(x) - expf(-x)) / (expf(x) + expf(-x));
 }
 
+/*
+  Leaky ReLU activation function
+    
+  Parameters:
+    x - Input value
+    
+  Returns:
+    LeakyReLU(x) = x if x > 0 else 0.01 * x
+*/
 float leaky_reluf(float x) {
   return x > 0 ? x : .01f * x;
 }
 
+/*
+  Mapping of Activation enum to proper activation function
+    
+  Parameters:
+    x - Input value
+    act - Activation function to apply
+    
+  Returns:
+    Result of activation function
+*/
 float actf(float x, Activation act) {
   switch (act) {
     case SIG: return sigmoidf(x);
@@ -434,10 +645,21 @@ float actf(float x, Activation act) {
     case LEAKY_RELU: return leaky_reluf(x);
     case SOFTMAX: return x;
   }
+
   NN_ASSERT(0 && "Unreachable");
   return 0.0f;
 }
 
+/*
+  Apply Softmax function to a Matrix
+    
+  Parameters:
+    m - Input Matrix
+
+  Note:
+    Applies softmax to Matrix in place
+    Will overwrite all values in Matrix
+*/
 void softmax(Matrix m) {
   for (size_t i = 0; i < m.rows; ++i) {
         float max = MAT_AT(m, i, 0);
@@ -459,10 +681,29 @@ void softmax(Matrix m) {
     }
 }
 
+/*
+  Compute Derivative of Leaky ReLU
+    
+  Parameters:
+    x - Input value
+    
+  Returns:
+    Derivative of Leaky ReLU
+*/
 float deriv_leaky_reluf(float x) {
   return x > 0 ? 1.0f : .01f;
 }
 
+/*
+  Compute Derivative of Activation Function
+
+  Parameters:
+    x - Input value
+    act - Activation function
+
+  Returns:
+    Derivative of activation function
+*/
 float deriv_actf(float x, Activation act) {
   switch (act) {
     case SIG: return x * (1 - x);
@@ -475,7 +716,48 @@ float deriv_actf(float x, Activation act) {
   return 0.0f;
 }
 
-void batch_process(Region* r, Batch* b, size_t batch_size, NN n, Matrix m, float lr, NNConfig config) {
+/*
+  Compute derivative of loss function
+
+  Parameters:
+    y_pred - Predicted value
+    y_true - Real value
+    loss - Loss function
+
+  Returns:
+    Derivative of loss function
+*/
+float deriv_loss(float y_pred, float y_true, Loss loss) {
+  switch (loss) {
+    case MSE:
+      return 2 * (y_pred - y_true);
+
+    case BCE:
+      y_pred = y_pred < 1e-7f ? 1e-7f : (y_pred > 1-1e-7f ? 1-1e-7f : y_pred);
+      return (y_pred - y_true) / (y_pred * (1 - y_pred));
+
+    case CCE:
+      return y_pred - y_true;
+
+    default:
+      NN_ASSERT(0 && "Unreachable");
+      return 0.0f;
+  }
+}
+
+/*
+  Process training data in batches
+    
+  Parameters:
+    r - Memory region for temporary allocations
+    b - Batch state tracking
+    batch_size - Number of samples per batch
+    n - Neural network to train
+    m - Training data matrix
+    lr - Learning rate
+    config - Configuration of Network for Activations and Loss
+*/
+void batch_process(Region *r, Batch *b, size_t batch_size, NN n, Matrix m, float lr, NNConfig config) {
   printf("Entering batch_process\n");
   printf("Initial batch state: finished=%d, begin=%zu, cost=%f\n", b->finished, b->begin, b->cost);
   if (b->finished) {
@@ -512,6 +794,8 @@ void batch_process(Region* r, Batch* b, size_t batch_size, NN n, Matrix m, float
 
   printf("Starting backprop\n");
   NN g = nn_backprop(r, n, batch_t, config);
+  // finite differences call, would not use
+  // only really for testing and learning
   // NN g = nn_finite_diff(r, n, batch_t, 1e-5);
   if (g.arch_count != n.arch_count) {
     printf("Error: Gradient NN structure, g doesn't match original NN, n\n");
@@ -531,24 +815,17 @@ void batch_process(Region* r, Batch* b, size_t batch_size, NN n, Matrix m, float
   }
 }
 
-float deriv_loss(float y_pred, float y_true, Loss loss) {
-  switch (loss) {
-    case MSE:
-      return 2 * (y_pred - y_true);
+/*
+  Forward Pass through Attention Head
 
-    case BCE:
-      y_pred = y_pred < 1e-7f ? 1e-7f : (y_pred > 1-1e-7f ? 1-1e-7f : y_pred);
-      return (y_pred - y_true) / (y_pred * (1 - y_pred));
+  Parameters:
+    r - Memory region for tempory allocations
+    mha - Attention Head parameter
+    m - Input Matrix
 
-    case CCE:
-      return y_pred - y_true;
-
-    default:
-      NN_ASSERT(0 && "Unreachable");
-      return 0.0f;
-  }
-}
-
+  Returns:
+    Output of attention
+*/
 Matrix attention_forward(Region *r, AttentionHead *mha, Matrix *m) {
   Matrix Q = matrix_alloc(r, m->rows, mha->Wq->cols);
   matrix_dot(Q, *m, *(mha->Wq));
@@ -570,6 +847,14 @@ Matrix attention_forward(Region *r, AttentionHead *mha, Matrix *m) {
   return output;
 }
 
+/*
+  Forward Pass through feed-forward Network
+
+  Parameters:
+    r - Memory region for temporary allocations
+    ff - Feed-Forward parameters
+    m - Input Matrix
+*/
 Matrix feed_forward(Region *r, FeedForward *ff, Matrix *m) {
   Matrix hidden = matrix_alloc(r, m->rows, ff->W1->cols);
   matrix_dot(hidden, *m, *(ff->W1));
@@ -583,6 +868,17 @@ Matrix feed_forward(Region *r, FeedForward *ff, Matrix *m) {
   return output;
 }
 
+/*
+  Apply Layer Normalization
+
+  Parameters:
+    r - Memory region for temporary allocations
+    m - Input Matrix
+    norm_p - Normalization Parameters
+
+  Returns:
+    Normalized Matrix
+*/
 Matrix layer_norm(Region *r, Matrix *m, Matrix *norm_p) {
   Matrix norm = matrix_alloc(r, m->rows, m->cols);
   for (size_t i = 0; i < m->rows; i++) {
@@ -608,6 +904,17 @@ Matrix layer_norm(Region *r, Matrix *m, Matrix *norm_p) {
   return norm;
 }
 
+/*
+  Forward Pass through Transformer layer
+
+  Parameters:
+    r - Memory region for temporary allocations
+    tlayer - Transformer Layer parmeters
+    m - Input Matrix
+
+  Returns:
+    Output of transformer layer
+*/
 Matrix tlayer_forward(Region *r, TransformerLayer *tlayer, Matrix *m) {
   Matrix attention = attention_forward(r, &tlayer->att, m);
   Matrix m_copy = matrix_alloc(r, m->rows, m->cols);
@@ -622,6 +929,17 @@ Matrix tlayer_forward(Region *r, TransformerLayer *tlayer, Matrix *m) {
   return normal2;
 }
 
+/*
+  Forward Pass through Transformer
+
+  Parameters:
+    r - Memory region for temporary allocations
+    t - Transformer parameters
+    m - Input Matrix
+
+  Returns:
+    Output of Transformer
+*/
 Matrix transformer_forward(Region *r, Transformer *t, Matrix *m) {
   Matrix out = *m;
   for (size_t i = 0; i < t->layers; i++) {
@@ -635,6 +953,17 @@ Matrix transformer_forward(Region *r, Transformer *t, Matrix *m) {
   return out;
 }
 
+/*
+  Split matrix into multiple attention heads
+    
+  Parameters:
+    r - Memory region for temporary allocations
+    m - Input matrix
+    mha - Attention Head parameters
+    
+  Returns:
+    Matrix with Attention Heads concatenated along rows
+*/
 Matrix split_heads(Region *r, Matrix *m, AttentionHead *mha) {
   NN_ASSERT(m->cols % mha->att_heads == 0);
   size_t d = m->cols / mha->att_heads;
@@ -651,6 +980,17 @@ Matrix split_heads(Region *r, Matrix *m, AttentionHead *mha) {
   return result;
 }
 
+/*
+  Concatenate Attention Heads back into Matrix
+
+  Parameters:
+    r - Memory region for temporary allocations
+    m - Input matrix
+    mha - Attention Head parameters
+
+  Returns:
+    Reconstructed Matrix
+*/
 Matrix concat_heads(Region *r, Matrix *m, AttentionHead *mha) {
   NN_ASSERT(m->rows % mha->att_heads == 0);
   size_t original_rows = m->rows / mha->att_heads;
@@ -667,6 +1007,13 @@ Matrix concat_heads(Region *r, Matrix *m, AttentionHead *mha) {
   return result;
 }
 
+/*
+  Add bias Row Vector to a Matrix
+
+  Parameters:
+    m - Matrix
+    b - Row Vector (bias)
+*/
 void add_bias(Matrix m, Row b) {
   NN_ASSERT(m.cols == b.cols);
   for (size_t i = 0; i < m.rows; i++) {
