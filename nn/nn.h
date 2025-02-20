@@ -126,6 +126,16 @@ float compute_mse(NN n, Matrix m);
 float compute_bce(NN n, Matrix m);
 float compute_cce(NN n, Matrix m);
 
+Matrix attention_forward(Region *r, AttentionHead *mha, Matrix *m);
+Matrix tlayer_forward(Region *r, TransformerLayer *tlayer, Matrix *m);
+Matrix transformer_forward(Region *r, Transformer *t, Matrix *m);
+Matrix feed_forward(Region *r, FeedForward *ff, Matrix *m);
+
+Matrix split_heads(Region *r, Matrix *m, AttentionHead *mha);
+Matrix concat_heads(Region *r, Matrix *m, AttentionHead *mha);
+Matrix layer_norm(Region *r, Matrix *m, Matrix *norm_p);
+void add_bias(Matrix m, Row b);
+
 #endif // NN_H_
 
 #ifdef NN_IMPLEMENTATION
@@ -536,6 +546,133 @@ float deriv_loss(float y_pred, float y_true, Loss loss) {
     default:
       NN_ASSERT(0 && "Unreachable");
       return 0.0f;
+  }
+}
+
+Matrix attention_forward(Region *r, AttentionHead *mha, Matrix *m) {
+  Matrix Q = matrix_alloc(r, m->rows, mha->Wq->cols);
+  matrix_dot(Q, *m, *(mha->Wq));
+  Matrix K = matrix_alloc(r, m->rows, mha->Wk->cols);
+  matrix_dot(K, *m, *(mha->Wk));
+  Matrix V = matrix_alloc(r, m->rows, mha->Wv->cols);
+  matrix_dot(V, *m, *(mha->Wv));
+
+  Matrix Q_split = split_heads(r, &Q, mha);
+  Matrix K_split = split_heads(r, &K, mha);
+  Matrix V_split = split_heads(r, &V, mha);
+
+  Matrix attention = scaled_dot_product(r, &Q_split, &K_split, &V_split);
+
+  Matrix concat = concat_heads(r, &attention, mha);
+  Matrix output = matrix_alloc(r, concat.rows, mha->Wo->cols);
+  matrix_dot(output, concat, *(mha->Wo));
+
+  return output;
+}
+
+Matrix feed_forward(Region *r, FeedForward *ff, Matrix *m) {
+  Matrix hidden = matrix_alloc(r, m->rows, ff->W1->cols);
+  matrix_dot(hidden, *m, *(ff->W1));
+  add_bias(hidden, *ff->b1);
+  matrix_act(hidden, RELU);
+
+  Matrix output = matrix_alloc(r, hidden.rows, ff->W2->cols);
+  matrix_dot(output, hidden, *(ff->W2));
+  add_bias(output, *ff->b2);
+
+  return output;
+}
+
+Matrix layer_norm(Region *r, Matrix *m, Matrix *norm_p) {
+  Matrix norm = matrix_alloc(r, m->rows, m->cols);
+  for (size_t i = 0; i < m->rows; i++) {
+    float sum = 0.0f;
+    for (size_t j = 0; j < m->cols; j++) {
+      sum += MAT_AT(*m, i, j);
+    }
+
+    float mean = sum / m->cols;
+    float var = 0.0f;
+    for (size_t j = 0; j < m->cols; j++) {
+      float diff = MAT_AT(*m, i, j) - mean;
+      var += diff * diff;
+    }
+
+    float std = sqrt(var / m->cols + 1e-5f);
+    for (size_t j = 0; j < m->cols; j++) {
+      float normal = (MAT_AT(*m, i, j) - mean) / std;
+      MAT_AT(norm, i, j) = normal * MAT_AT(*norm_p, 0, j);
+    }
+  }
+
+  return norm;
+}
+
+Matrix tlayer_forward(Region *r, TransformerLayer *tlayer, Matrix *m) {
+  Matrix attention = attention_forward(r, &tlayer->att, m);
+  Matrix m_copy = matrix_alloc(r, m->rows, m->cols);
+  matrix_copy(m_copy, *m);
+  matrix_add(m_copy, attention);
+  Matrix normal1 = layer_norm(r, &m_copy, tlayer->norm1);
+
+  Matrix ffout = feed_forward(r, &tlayer->ff, &normal1);
+  matrix_add(normal1, ffout);
+  Matrix normal2 = layer_norm(r, &normal1, tlayer->norm2);
+
+  return normal2;
+}
+
+Matrix transformer_forward(Region *r, Transformer *t, Matrix *m) {
+  Matrix out = *m;
+  for (size_t i = 0; i < t->layers; i++) {
+    out = tlayer_forward(r, &t->tlayers[i], &out);
+  }
+
+  if (t->encode != NULL) {
+    matrix_dot(out, out, *t->encode);
+  }
+
+  return out;
+}
+
+Matrix split_heads(Region *r, Matrix *m, AttentionHead *mha) {
+  NN_ASSERT(m->cols % mha->att_heads == 0);
+  size_t d = m->cols / mha->att_heads;
+
+  Matrix result = matrix_alloc(r, m->rows * mha->att_heads, d);
+  for (size_t i = 0; i < m->rows; i++) {
+    for (size_t j = 0; j < mha->att_heads; j++) {
+      for (size_t k = 0; k < d; k++) {
+        MAT_AT(result, i * mha->att_heads + j, k) = MAT_AT(*m, i, j * d + k);
+      }
+    }
+  }
+
+  return result;
+}
+
+Matrix concat_heads(Region *r, Matrix *m, AttentionHead *mha) {
+  NN_ASSERT(m->rows % mha->att_heads == 0);
+  size_t original_rows = m->rows / mha->att_heads;
+
+  Matrix result = matrix_alloc(r, original_rows, mha->att_heads * m->cols);
+  for (size_t i = 0; i < original_rows; i++) {
+    for (size_t j = 0; j < mha->att_heads; j++) {
+      for (size_t k = 0; k < m->cols; k++) {
+        MAT_AT(result, i, j * m->cols + k) = MAT_AT(*m, i * mha->att_heads + j, k);
+      }
+    }
+  }
+
+  return result;
+}
+
+void add_bias(Matrix m, Row b) {
+  NN_ASSERT(m.cols == b.cols);
+  for (size_t i = 0; i < m.rows; i++) {
+    for (size_t j = 0; j < m.cols; j++) {
+      MAT_AT(m, i, j) += ROW_AT(b, j);
+    }
   }
 }
 
