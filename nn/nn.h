@@ -17,6 +17,55 @@
     I'd imagine implementing convolutional neural nets
     in this current style would quite literally double the codebase
     this needs fixed
+
+  IDEAS:
+    typedef enum {
+      DENSE_LAYER,
+      ATTENTION_LAYER,
+      CONV_LAYER
+    } LayerType;
+
+    typedef struct {
+      LayerType type;
+      union {
+        struct { Matrix W; Row b; } dense;
+        struct { Matrix Wq, Wk, Wv, Wo; } attention;
+        struct { FilterBank filters; } conv;
+      };
+      // shared
+      Matrix output;
+      Matrix gradients;
+    } Layer;
+
+    typedef struct {
+      Layer *layers;
+      size_t num_layers;
+      Region *memory_region;
+    } Network;
+
+    // shared
+    typedef struct {
+      Matrix (*forward)(Layer *layer, Matrix input);
+      Matrix (*backward)(Layer *layer, Matrix grad_output);
+      void (*update)(Layer *layer, float lr);
+    } LayerOps;
+
+    Network create_transformer(Region *r, TConfig cfg) {
+      Network n = initalize it
+      add_attention_layer(&n, cfg);
+      add_ffn_layer(&n, cfg);
+      add_norm_layer(&n, cfg);
+      return n;
+    }
+
+    void train_step(Network *n, Matrix batch, float lr) {
+      Matrix output = forward_pass(n, batch);
+      Matrix grad = loss_gradient(output, targets);
+      backward_pass(n, grad);
+      update_parameters(n, lr);
+    }
+
+    Need Optimizer (Adam, SGD)
 */
 
 #ifndef NN_H_
