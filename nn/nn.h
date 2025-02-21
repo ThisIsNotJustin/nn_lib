@@ -250,6 +250,14 @@ Matrix tlayer_forward(Region *r, TransformerLayer *tlayer, Matrix *m);
 Matrix transformer_forward(Region *r, Transformer *t, Matrix *m);
 Matrix feed_forward(Region *r, FeedForward *ff, Matrix *m);
 
+Transformer* transformer_alloc(Region *r, TConfig config);
+TransformerLayer* tlayer_alloc(Region *r, size_t d_model, size_t d_ff, size_t heads);
+void transformer_backprop(Region *r, Transformer *t, Transformer *grad_t, Matrix *in, Matrix *grad);
+Matrix* norm_backward(Region *r, Matrix *grad, Matrix *norm);
+Matrix* ff_backward(Region *r, FeedForward *ff, Matrix *grad);
+Matrix* attention_backward(Region *r, AttentionHead *mha, Matrix *norm);
+void transformer_learn();
+
 Matrix split_heads(Region *r, Matrix *m, AttentionHead *mha);
 Matrix concat_heads(Region *r, Matrix *m, AttentionHead *mha);
 Matrix layer_norm(Region *r, Matrix *m, Matrix *norm_p);
@@ -1089,6 +1097,76 @@ void add_bias(Matrix m, Row b) {
       MAT_AT(m, i, j) += ROW_AT(b, j);
     }
   }
+}
+
+Transformer* transformer_alloc(Region *r, TConfig config) {
+  Transformer *t = region_alloc(r, sizeof(Transformer));
+  t->tlayers = region_alloc(r, sizeof(TransformerLayer) * config.layers);
+  for (size_t i = 0; i < config.layers; i++) {
+    t->tlayers[i] = *tlayer_alloc(r, config.arch[0], config.ff_arch[0], config.att_heads)
+  }
+  
+  t->layers = config.layers;
+  t->encode = matrix_alloc(r, config.arch[0], config.arch[0]);
+  t->arch = config.arch;
+}
+
+TransformerLayer* tlayer_alloc(Region *r, size_t d_model, size_t d_ff, size_t heads) {
+  TransformerLayer *tlayer = region_alloc(r, sizeof(TransformerLayer));
+  tlayer->att.Wq = matrix_alloc(r, d_model, d_model);
+  tlayer->att.Wk = matrix_alloc(r, d_model, d_model);
+  tlayer->att.Wv = matrix_alloc(r, d_model, d_model);
+  tlayer->att.Wo = matrix_alloc(r, d_model, d_model);
+  tlayer->att.att_heads = heads;
+  tlayer->ff.W1 = matrix_alloc(r, d_model, d_ff);
+  tlayer->ff.W2 = matrix_alloc(r, d_ff, d_model);
+  tlayer->ff.b1 = row_alloc(r, 1, d_model);
+  tlayer->ff.b2 = row_alloc(r, 1, d_model);
+
+  return tlayer;
+}
+
+void transformer_backprop(Region *r, Transformer *t, Transformer *grad_t, Matrix *in, Matrix *grad) {
+  Matrix *curr_grad = grad;
+
+  for (size_t i = t->layers - 1; i >= 0; i--) {
+    TransformerLayer *tlayer = &(t->layer[i]);
+    TransformerLayer *gradlayer = &(grad_t->layer[i]);
+
+    Matrix *dnorm2 = norm_backward(r, curr_grad, tlayer->norm2);
+    matrix_copy(*gradlayer->norm2, *dnorm2);
+
+    Matrix *dff = ff_backward(r, &(tlayer->ff), curr_grad);
+    matrix_copy(*gradlayer->ff.W1, *dff);
+    matrix_copy(*gradlayer->ff.W2, *dff);
+
+    Matrix *dnorm1 = norm_backward(r, curr_grad, tlayer->norm1);
+    matrix_copy(*gradlayer->norm1, *dnorm1);
+
+    Matrix *datt = attention_backward(r, &(tlayer->att), dnorm1);
+    matrix_copy(*gradlayer->att.Wq, *datt);
+    matrix_copy(*gradlayer->att.Wk, *datt);
+    matrix_copy(*gradlayer->att.Wv, *datt);
+    matrix_copy(*gradlayer->att.Wo, *datt);
+
+    curr_grad = datt;
+  }
+}
+
+Matrix* norm_backward(Region *r, Matrix *grad, Matrix *norm) {
+
+}
+
+Matrix* ff_backward(Region *r, FeedForward *ff, Matrix *grad) {
+
+}
+
+Matrix* attention_backward(Region *r, AttentionHead *mha, Matrix *norm) {
+
+}
+
+void transformer_learn() {
+  
 }
 
 #endif // NN_IMPLEMENTATION
