@@ -17,6 +17,7 @@ void matrix_scale(Matrix m, float n);
 void matrix_add_scalar(Matrix m, float n);
 float matrix_fnorm(Matrix m);
 Matrix scaled_dot_product(Region *r, Matrix *Q, Matrix *K, Matrix *V);
+float matrix_variance(Matrix *m, float mean);
 
 void softmax(Matrix m);
 
@@ -292,6 +293,20 @@ void matrix_mul(Matrix *dst, Matrix *m, Matrix *n) {
       }
     }
   }
+}
+
+float matrix_variance(Matrix *m, float mean) {
+  float sum = 0.0f;
+  size_t total_elements = m->rows * m->cols;
+
+  for (size_t i = 0; i < m->rows; i++) {
+    for (size_t j = 0; j < m->cols; j++) {
+      float diff = MAT_AT(*m, i, j) - mean;
+      sum += diff * diff;
+    }
+  }
+
+  return sum / total_elements;
 }
 
 #endif // LA_IMPLEMENTATION
