@@ -16,8 +16,10 @@ void matrix_subtract(Matrix a, Matrix b);
 void matrix_scale(Matrix m, float n);
 void matrix_add_scalar(Matrix m, float n);
 float matrix_fnorm(Matrix m);
-Matrix scaled_dot_product(Region *r, Matrix *Q, Matrix *K, Matrix *V);
+Matrix* scaled_dot_product(Region *r, Matrix *Q, Matrix *K, Matrix *V);
 float matrix_variance(Matrix *m, float mean);
+void matrix_add_scaled(Matrix *a, Matrix *b, float scale);
+void row_add_scaled(Row *a, Row *b, float scale);
 
 void softmax(Matrix m);
 
@@ -66,6 +68,9 @@ float matrix_mean(Matrix m) {
     dst.rows == a.rows && dst.cols == b.cols
 */
 void matrix_dot(Matrix dst, Matrix a, Matrix b) {
+  printf("dst.cols: %zu dst.rows: %zu\n", dst.cols, dst.rows);
+  printf("a.cols: %zu a.rows: %zu\n", a.cols, a.rows);
+  printf("b.cols: %zu b.rows: %zu\n", b.cols, b.rows);
   MAT_ASSERT(a.cols == b.rows);
   size_t c = a.cols;
   MAT_ASSERT(dst.rows == a.rows);
@@ -130,6 +135,13 @@ void matrix_add(Matrix a, Matrix b) {
     for (size_t j = 0; j < a.cols; j++) {
       MAT_AT(a, i, j) += MAT_AT(b, i, j);
     }
+  }
+}
+
+void row_add(Row a, Row b) {
+  MAT_ASSERT(a.cols == b.cols);
+  for (size_t i = 0; i < a.cols; i++) {
+    ROW_AT(a, i) += ROW_AT(b, i);
   }
 }
 
@@ -229,7 +241,7 @@ float matrix_fnorm(Matrix m) {
   Returns:
     new Matrix of softmax(QKT/sqrt(dk)) V 
 */
-Matrix scaled_dot_product(Region *r, Matrix *Q, Matrix *K, Matrix *V) {
+Matrix* scaled_dot_product(Region *r, Matrix *Q, Matrix *K, Matrix *V) {
   MAT_ASSERT(Q->cols == K->cols);
   MAT_ASSERT(K->rows == V->rows);
 
@@ -240,20 +252,20 @@ Matrix scaled_dot_product(Region *r, Matrix *Q, Matrix *K, Matrix *V) {
   // should we overwrite the memory region of K for K_T
   // and Q for scores
   // rather than allocating more memory within this function?
-  Matrix K_T = matrix_alloc(r, K->cols, K->rows);
-  matrix_transpose(K_T, *K);
-  Matrix scores = matrix_alloc(r, m, n);
-  matrix_dot(scores, *Q, K_T);
+  Matrix *K_T = matrix_alloc(r, K->cols, K->rows);
+  matrix_transpose(*K_T, *K);
+  Matrix *scores = matrix_alloc(r, m, n);
+  matrix_dot(*scores, *Q, *K_T);
 
   float scale = 1.0f / sqrtf((float)d_k);
-  matrix_scale(scores, scale);
+  matrix_scale(*scores, scale);
 
-  softmax(scores);
+  softmax(*scores);
 
   // again should memory simply be overwritten rather
   // than allocating more??
-  Matrix res = matrix_alloc(r, m, V->cols);
-  matrix_dot(res, scores, *V);
+  Matrix *res = matrix_alloc(r, m, V->cols);
+  matrix_dot(*res, *scores, *V);
 
   return res;
 }
@@ -307,6 +319,47 @@ float matrix_variance(Matrix *m, float mean) {
   }
 
   return sum / total_elements;
+}
+
+/*
+  Adds a scaled matrix to another matrix (a += b * scale)
+    
+  Parameters:
+    a - Matrix to modify (destination)
+    b - Matrix to scale and add
+    scale - Scaling factor
+    
+  Preconditions:
+    a->rows == b->rows && a->cols == b->cols
+*/
+void matrix_add_scaled(Matrix *a, Matrix *b, float scale) {
+  MAT_ASSERT(a->cols == b->cols);
+  MAT_ASSERT(a->rows == b->rows);
+
+  for (size_t i = 0; i < a->rows; i++) {
+    for (size_t j = 0; j < a->cols; j++) {
+      MAT_AT(*a, i, j) += MAT_AT(*b, i, j) * scale;
+    }
+  }
+}
+
+/*
+  Adds a scaled row vector to another row vector (a += b * scale)
+    
+  Parameters:
+    a - Row to modify (destination)
+    b - Row to scale and add
+    scale - Scaling factor
+    
+  Preconditions:
+    a->cols == b->cols
+*/
+void row_add_scaled(Row *a, Row *b, float scale) {
+  MAT_ASSERT(a->cols == b->cols);
+
+  for (size_t j = 0; j < a->cols; j++) {
+    ROW_AT(*a, j) += ROW_AT(*b, j) * scale;
+  }
 }
 
 #endif // LA_IMPLEMENTATION

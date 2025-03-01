@@ -25,7 +25,7 @@ typedef struct {
     float *elements;
 } Row;
 
-Matrix matrix_alloc(Region *r, size_t rows, size_t cols);
+Matrix* matrix_alloc(Region *r, size_t rows, size_t cols);
 void matrix_copy(Matrix destination, Matrix source);
 
 #define MAT_AT(m, i , j) (m).elements[(i)*(m).cols + (j)]
@@ -33,7 +33,7 @@ void matrix_copy(Matrix destination, Matrix source);
 
 void matrix_fill(Matrix m, float val);
 void matrix_rand(Matrix m, float low, float high);
-Row matrix_row(Matrix m, size_t row);
+Row* matrix_row(Matrix *m, size_t row);
 void matrix_print(Matrix m, const char *name, size_t padding);
 void matrix_shuffle_rows(Matrix m);
 //bool matrices_equal(Matrix a, Matrix b);
@@ -68,15 +68,16 @@ Row row_slice(Row row, size_t i, size_t cols);
         Initialized Matrix structure with contiguous memory
         Elements are uninitialized by default
 */
-Matrix matrix_alloc(Region *r, size_t rows, size_t cols) {
+Matrix* matrix_alloc(Region *r, size_t rows, size_t cols) {
+    MAT_ASSERT(r != NULL);
     if (rows < 1) rows = 1;
     if (cols < 1) cols = 1;
 
-    Matrix m;
-    m.rows = rows;
-    m.cols = cols;
-    m.elements = (float*) region_alloc(r, sizeof(*m.elements) * rows * cols);
-    MAT_ASSERT(m.elements != NULL);
+    Matrix *m = region_alloc(r, sizeof(Matrix));
+    m->rows = rows;
+    m->cols = cols;
+    m->elements = (float*) region_alloc(r, sizeof(*m->elements) * rows * cols);
+    MAT_ASSERT(m->elements != NULL);
     return m;
 }
 
@@ -93,11 +94,11 @@ Matrix matrix_alloc(Region *r, size_t rows, size_t cols) {
     Preconditions:
         row < m.rows
 */
-Row matrix_row(Matrix m, size_t row) {
-    return (Row) {
-        .cols = m.cols,
-        .elements = &MAT_AT(m, row, 0),
-    };
+Row* matrix_row(Matrix *m, size_t row) {
+    Row *r = (Row*)malloc(sizeof(Row));
+    r->cols = m->cols;
+    r->elements = &MAT_AT(*m, row, 0);
+    return r;
 }
 
 /*
@@ -112,9 +113,9 @@ Row matrix_row(Matrix m, size_t row) {
         destination.cols == source.cols
 */
 void matrix_copy(Matrix destination, Matrix source) {
-    //if (matrices_equal(destination, source)) {
-    //    return;
-    //}
+    printf("matrix_copy - dst: [%zu x %zu], src: [%zu x %zu]\n",
+           destination.rows, destination.cols,
+           source.rows, source.cols);
     MAT_ASSERT(destination.rows == source.rows);
     MAT_ASSERT(destination.cols == source.cols);
     for (size_t i = 0; i < destination.rows; i++) {
@@ -295,7 +296,7 @@ Matrix* matrix_load(Region *r, const char *file_string) {
         fclose(file);
         return NULL;
     }
-    *m = matrix_alloc(r, rows, cols);
+    m = matrix_alloc(r, rows, cols);
 
     for (size_t i = 0; i < rows; i++) {
         for (size_t j = 0; j < cols; j++) {

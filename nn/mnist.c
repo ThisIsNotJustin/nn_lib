@@ -113,7 +113,7 @@ int read_mnist_labels(const char* file_path, Matrix data, int num_samples) {
 }
 
 Matrix load_mnist(Region* r, const char* img_file, const char* label_file, int num_samples) {
-    Matrix data = matrix_alloc(r, num_samples, MNIST_IMG_SIZE + MNIST_LABEL_SIZE);
+    Matrix data = *matrix_alloc(r, num_samples, MNIST_IMG_SIZE + MNIST_LABEL_SIZE);
     
     if (read_mnist_images(img_file, data, num_samples) != 0 ||
         read_mnist_labels(label_file, data, num_samples) != 0) {
@@ -178,7 +178,7 @@ int main() {
   size_t correct = 0;
 
   for (size_t i = 0; i < test_data.rows; i++) {
-    Row test_row = matrix_row(test_data, i);
+    Row test_row = *matrix_row(&test_data, i);
     
     Row input = NN_INPUT(n);
     Row image_part = row_slice(test_row, 0, MNIST_IMG_SIZE);
@@ -215,13 +215,13 @@ int main() {
   float accuracy = (float) correct / test_data.rows * 100.0f;
   printf("Test Accuracy: %.2f%%\n", accuracy);
 
-  Row first_image = matrix_row(test_data, 0);
+  Row first_image = *matrix_row(&test_data, 0);
   for (size_t i = 0; i < MNIST_IMG_SIZE; i++) {
       printf("%f ", ROW_AT(first_image, i));
   }
   printf("\n");
 
-  Row first_label = matrix_row(test_data, 0);
+  Row first_label = *matrix_row(&test_data, 0);
   for (size_t i = MNIST_IMG_SIZE; i < MNIST_IMG_SIZE + MNIST_LABEL_SIZE; i++) {
       if (ROW_AT(first_label, i) == 1.0) {
           printf("Corresponding digit: %zu\n", i - MNIST_IMG_SIZE);

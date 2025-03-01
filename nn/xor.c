@@ -14,7 +14,7 @@ int main(void) {
         1, 1,    0
     };
 
-    Matrix m = matrix_alloc(&r, 4, 3);
+    Matrix m = *matrix_alloc(&r, 4, 3);
     for (size_t i = 0; i < 4; i++) {
         MAT_AT(m, i, 0) = training_data[i * 3];
         MAT_AT(m, i, 1) = training_data[i * 3 + 1];
