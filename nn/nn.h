@@ -182,13 +182,17 @@ typedef struct {
   Matrix *Wk;
   Matrix *Wv;
   Matrix *Wo;
+  size_t att_heads;
+
   Matrix *Q;
   Matrix *K;
   Matrix *V;
   Matrix *scores;
-  size_t att_heads;
-  size_t *arch;
-  size_t arch_count;
+
+  Matrix *dWq;
+  Matrix *dWk;
+  Matrix *dWv;
+  Matrix *dWo;
 } AttentionHead;
 
 typedef struct {
@@ -196,25 +200,53 @@ typedef struct {
   Row *b1;
   Matrix *W2;
   Row *b2;
-  Matrix *input;
+
   Matrix *hidden;
+
+  Matrix *dW1;
+  Row *db1;
+  Matrix *dW2;
+  Row *db2;
 } FeedForward;
 
 typedef struct {
   AttentionHead att;
   FeedForward ff;
-  Matrix *norm1;
-  Matrix *norm2;
-  Matrix *norm1_input;
-  Matrix *norm2_input;
+  Matrix *gamma1;
+  Matrix *gamma2;
+  Matrix *beta1;
+  Matrix *beta2;
+
+  Matrix *dgamma1;
+  Matrix *dgamma2;
+  Matrix *dbeta1;
+  Matrix *dbeta2;
 } TransformerLayer;
 
 typedef struct {
   TransformerLayer *tlayers;
   size_t layers;
-  Matrix *encode;
-  size_t *arch;
+  // Matrix *encode;
+  size_t d_model;
 } Transformer;
+
+typedef struct {
+  size_t d_model;
+  size_t num_layers;
+  // embedding;
+  // pos_encoding;
+  size_t dropout;
+  size_t *enc_layers;
+} Encoder;
+
+typedef struct {
+  size_t d_model;
+  size_t num_layers;
+  // embedding;
+  // pos_encoding;
+  size_t dropout;
+  size_t *dec_layers;
+} Decoder;
 
 typedef struct {
     size_t begin;
@@ -255,20 +287,19 @@ float compute_cce(NN n, Matrix m);
 
 Matrix* attention_forward(Region *r, AttentionHead *mha, Matrix *m);
 Matrix* tlayer_forward(Region *r, TransformerLayer *tlayer, Matrix *m);
-Matrix* transformer_forward(Region *r, Transformer *t, Matrix *m);
-Matrix* feed_forward(Region *r, FeedForward *ff, Matrix *m);
+Matrix* transformer_forward(Region *r, Transformer *t, Matrix *input);
+Matrix* feed_forward(Region *r, FeedForward *ff, Matrix *input);
 
-Transformer* transformer_alloc(Region *r, TConfig config);
-TransformerLayer* tlayer_alloc(Region *r, size_t d_model, size_t d_ff, size_t heads);
-void transformer_backprop(Region *r, Transformer *t, Transformer *grad_t, Matrix *in, Matrix *grad);
-Matrix* norm_backward(Region *r, Matrix *grad, Matrix *x_forward, Matrix *gamma);
+Transformer* transformer_alloc(Region *r, size_t num_layers, size_t d_model, size_t dff, size_t num_heads);
+// TransformerLayer* tlayer_alloc(Region *r, size_t d_model, size_t d_ff, size_t heads);
+void transformer_backprop(Region *r, Transformer *t, Matrix *input, Matrix *grad_output);
+Matrix* norm_backward(Region *r, Matrix *grad, Matrix *input, Matrix *gamma, Matrix *d_gamma, Matrix *d_beta);
 Matrix* ff_backward(Region *r, FeedForward *ff, Matrix *grad, Matrix *input, Matrix *hidden);
 Matrix* attention_backward(Region *r, AttentionHead *mha, Matrix *grad, Matrix *Q, Matrix *K, Matrix *V, Matrix *scores);
-void transformer_learn(Transformer *t, Transformer *grad_t, float lr);
+void transformer_learn(Transformer *t, float lr);
 
 Matrix* split_heads(Region *r, Matrix *m, AttentionHead *mha);
 Matrix* concat_heads(Region *r, Matrix *m, AttentionHead *mha);
-Matrix* layer_norm(Region *r, Matrix *m, Matrix *norm_p);
 void add_bias(Matrix m, Row b);
 
 #endif // NN_H_
@@ -910,25 +941,28 @@ void batch_process(Region *r, Batch *b, size_t batch_size, NN n, Matrix m, float
   Returns:
     Output of attention
 */
-Matrix* attention_forward(Region *r, AttentionHead *mha, Matrix *m) {
+Matrix* attention_forward(Region *r, AttentionHead *mha, Matrix *input) {
   printf("attention forward\n");
-  mha->Q = matrix_alloc(r, m->rows, mha->Wq->cols);
-  matrix_dot(*mha->Q, *m, *(mha->Wq));
-    
-  mha->K = matrix_alloc(r, m->rows, mha->Wk->cols);
-  matrix_dot(*mha->K, *m, *(mha->Wk));
-    
-  mha->V = matrix_alloc(r, m->rows, mha->Wv->cols);
-  matrix_dot(*mha->V, *m, *(mha->Wv));
 
-  Matrix *Q_split = split_heads(r, mha->Q, mha);
-  Matrix *K_split = split_heads(r, mha->K, mha);
-  Matrix *V_split = split_heads(r, mha->V, mha);
+  size_t batch_size = input->rows;
+  size_t d_model = input->cols;
+  size_t num_heads = mha->att_heads;
 
-  mha->scores = scaled_dot_product(r, Q_split, K_split, V_split);
+  Matrix *Q = matrix_alloc(r, batch_size, d_model);
+  Matrix *K = matrix_alloc(r, batch_size, d_model);
+  Matrix *V = matrix_alloc(r, batch_size, d_model);
+  matrix_dot(*Q, *input, *(mha->Wq));
+  matrix_dot(*K, *input, *(mha->Wk));
+  matrix_dot(*V, *input, *(mha->Wv));
 
-  Matrix *concat = concat_heads(r, mha->scores, mha);
-  Matrix *output = matrix_alloc(r, concat->rows, mha->Wo->cols);
+  size_t d_head = d_model / num_heads;
+  Matrix *Q_split = split_heads(r, Q, mha);
+  Matrix *K_split = split_heads(r, K, mha);
+  Matrix *V_split = split_heads(r, V, mha);
+
+  Matrix *scores = scaled_dot_product(r, Q_split, K_split, V_split);
+  Matrix *concat = concat_heads(r, scores, mha);
+  Matrix *output = matrix_alloc(r, batch_size, d_model);
   matrix_dot(*output, *concat, *(mha->Wo));
 
   return output;
@@ -942,61 +976,19 @@ Matrix* attention_forward(Region *r, AttentionHead *mha, Matrix *m) {
     ff - Feed-Forward parameters
     m - Input Matrix
 */
-Matrix* feed_forward(Region *r, FeedForward *ff, Matrix *m) {
+Matrix* feed_forward(Region *r, FeedForward *ff, Matrix *input) {
   printf("feed forward\n");
-  NN_ASSERT(m->cols == ff->W1->rows);
 
-  Matrix *hidden = matrix_alloc(r, m->rows, ff->W1->cols);
-  matrix_dot(*hidden, *m, *(ff->W1));
-  NN_ASSERT(hidden->cols == ff->b1->cols);
+  Matrix *hidden = matrix_alloc(r, input->rows, ff->W1->cols);
+  matrix_dot(*hidden, *input, *(ff->W1));
   add_bias(*hidden, *ff->b1);
   matrix_act(*hidden, RELU);
 
-  ff->hidden = hidden;
-
   Matrix *output = matrix_alloc(r, hidden->rows, ff->W2->cols);
   matrix_dot(*output, *hidden, *(ff->W2));
-  NN_ASSERT(output->cols == ff->b2->cols);
   add_bias(*output, *ff->b2);
 
   return output;
-}
-
-/*
-  Apply Layer Normalization
-
-  Parameters:
-    r - Memory region for temporary allocations
-    m - Input Matrix
-    norm_p - Normalization Parameters
-
-  Returns:
-    Normalized Matrix
-*/
-Matrix* layer_norm(Region *r, Matrix *m, Matrix *norm_p) {
-  printf("layer norm\n");
-  Matrix *norm = matrix_alloc(r, m->rows, m->cols);
-  for (size_t i = 0; i < m->rows; i++) {
-    float sum = 0.0f;
-    for (size_t j = 0; j < m->cols; j++) {
-      sum += MAT_AT(*m, i, j);
-    }
-
-    float mean = sum / m->cols;
-    float var = 0.0f;
-    for (size_t j = 0; j < m->cols; j++) {
-      float diff = MAT_AT(*m, i, j) - mean;
-      var += diff * diff;
-    }
-
-    float std = sqrt(var / m->cols + 1e-5f);
-    for (size_t j = 0; j < m->cols; j++) {
-      float normal = (MAT_AT(*m, i, j) - mean) / std;
-      MAT_AT(*norm, i, j) = normal * MAT_AT(*norm_p, 0, j);
-    }
-  }
-
-  return norm;
 }
 
 /*
@@ -1010,42 +1002,22 @@ Matrix* layer_norm(Region *r, Matrix *m, Matrix *norm_p) {
   Returns:
     Output of transformer layer
 */
-Matrix* tlayer_forward(Region *r, TransformerLayer *tlayer, Matrix *m) {
+Matrix* tlayer_forward(Region *r, TransformerLayer *tlayer, Matrix *input) {
   printf("tlayer forward\n");
-  NN_ASSERT(m != NULL);
-  NN_ASSERT(tlayer != NULL);
-  printf("Input matrix: rows=%zu, cols=%zu\n", m->rows, m->cols);
-
-  tlayer->norm1_input = matrix_alloc(r, m->rows, m->cols);
-  printf("Norm1 input: rows=%zu, cols=%zu\n", tlayer->norm1_input->rows, tlayer->norm1_input->cols);
-  matrix_copy(*tlayer->norm1_input, *m);
   
-  Matrix *attention = attention_forward(r, &tlayer->att, m);
-  printf("Attention output: rows=%zu, cols=%zu\n", attention->rows, attention->cols);
-  NN_ASSERT(attention->rows == m->rows);
-  NN_ASSERT(attention->cols == m->cols);
+  Matrix *attention_output = attention_forward(r, &tlayer->att, input);
+  Matrix *add_norm_input = matrix_alloc(r, input->rows, input->cols);
+  matrix_add(*add_norm_input, *attention_output);
+  Matrix *norm1_output = layer_norm(r, add_norm_input, tlayer->gamma1, tlayer->beta1);
 
-  Matrix *m_copy = matrix_alloc(r, m->rows, m->cols);
-  matrix_copy(*m_copy, *m);
-  matrix_add(*m_copy, *attention);
+  Matrix *ff_output = feed_forward(r, &tlayer->ff, norm1_output);
 
-  Matrix *normal1 = layer_norm(r, m_copy, tlayer->norm1);
-  printf("Layer norm 1 output: rows=%zu, cols=%zu\n", normal1->rows, normal1->cols);
-  tlayer->ff.input = matrix_alloc(r, normal1->rows, normal1->cols);
-  matrix_copy(*tlayer->ff.input, *normal1);
+  Matrix *add_norm2_input = matrix_alloc(r, input->rows, input->cols);
+  matrix_copy(*add_norm2_input, *norm1_output);
+  matrix_add(*add_norm2_input, *ff_output);
+  Matrix *output = layer_norm(r, add_norm2_input, tlayer->gamma2, tlayer->beta2);
 
-  Matrix *ffout = feed_forward(r, &tlayer->ff, normal1);
-  printf("FF output: rows=%zu, cols=%zu\n", ffout->rows, ffout->cols);
-  NN_ASSERT(ffout->rows == normal1->rows);
-  NN_ASSERT(ffout->cols == normal1->cols);
-  matrix_add(*normal1, *ffout);
-
-  tlayer->norm2_input = matrix_alloc(r, normal1->rows, normal1->cols);
-  matrix_copy(*tlayer->norm2_input, *normal1);
-  Matrix *normal2 = layer_norm(r, normal1, tlayer->norm2);
-  printf("Final output: rows=%zu, cols=%zu\n", normal2->rows, normal2->cols);
-
-  return normal2;
+  return output;
 }
 
 /*
@@ -1059,19 +1031,21 @@ Matrix* tlayer_forward(Region *r, TransformerLayer *tlayer, Matrix *m) {
   Returns:
     Output of Transformer
 */
-Matrix* transformer_forward(Region *r, Transformer *t, Matrix *m) {
+Matrix* transformer_forward(Region *r, Transformer *t, Matrix *input) {
   printf("transformer forward\n");
   NN_ASSERT(t != NULL);
-  NN_ASSERT(m != NULL);
+  NN_ASSERT(input != NULL);
 
-  Matrix *out = m;
+  Matrix *out = input;
   for (size_t i = 0; i < t->layers; i++) {
     out = tlayer_forward(r, &t->tlayers[i], out);
   }
 
+  /*
   if (t->encode != NULL) {
     matrix_dot(*out, *out, *t->encode);
   }
+  */
 
   return out;
 }
@@ -1164,31 +1138,42 @@ void softmax_backward(Matrix grad, Matrix probs) {
   }
 }
 
-Transformer* transformer_alloc(Region *r, TConfig config) {
+Transformer* transformer_alloc(Region *r, size_t num_layers, size_t d_model, size_t dff, size_t num_heads) {
   NN_ASSERT(r != NULL);
-  NN_ASSERT(config.layers > 0);
-  NN_ASSERT(config.arch != NULL);
-  NN_ASSERT(config.ff_arch != NULL);
-  NN_ASSERT(config.att_heads > 0);
   
   Transformer *t = region_alloc(r, sizeof(Transformer));
   NN_ASSERT(t != NULL);
-  t->tlayers = region_alloc(r, sizeof(TransformerLayer) * config.layers);
+  t->tlayers = region_alloc(r, sizeof(TransformerLayer) * num_layers);
   NN_ASSERT(t->tlayers != NULL);
+  t->layers = num_layers;
+  t->d_model = d_model;
 
-  for (size_t i = 0; i < config.layers; i++) {
-    TransformerLayer *layer = tlayer_alloc(r, config.arch[0], config.ff_arch[0], config.att_heads);
-    t->tlayers[i] = *layer;
+  for (size_t i = 0; i < num_layers; i++) {
+    t->tlayers[i].att.Wq = matrix_alloc(r, d_model, d_model);
+    t->tlayers[i].att.Wk = matrix_alloc(r, d_model, d_model);
+    t->tlayers[i].att.Wv = matrix_alloc(r, d_model, d_model);
+    t->tlayers[i].att.Wo = matrix_alloc(r, d_model, d_model);
+    t->tlayers[i].att.att_heads = num_heads;
+
+    t->tlayers[i].ff.W1 = matrix_alloc(r, d_model, dff);
+    t->tlayers[i].ff.W2 = matrix_alloc(r, dff, d_model);
+    t->tlayers[i].ff.b1 = row_alloc(r, dff);
+    t->tlayers[i].ff.b2 = row_alloc(r, d_model);
+
+    t->tlayers[i].gamma1 = matrix_alloc(r, 1, d_model);
+    matrix_fill(*t->tlayers[i].gamma1, 1.0f);
+    t->tlayers[i].gamma2 = matrix_alloc(r, 1, d_model);
+    matrix_fill(*t->tlayers[i].gamma2, 1.0f);
+    t->tlayers[i].beta1 = matrix_alloc(r, 1, d_model);
+    matrix_fill(*t->tlayers[i].beta1, 0.0f);
+    t->tlayers[i].beta2 = matrix_alloc(r, 1, d_model);
+    matrix_fill(*t->tlayers[i].beta2, 0.0f);
   }
-  
-  t->layers = config.layers;
-  t->encode = NULL;
-  // *t->encode = matrix_alloc(r, config.arch[0], config.arch[0]);
-  // NN_ASSERT(t->encode->elements != NULL);
-  t->arch = config.arch;
 
   return t;
 }
+
+/*
 
 TransformerLayer* tlayer_alloc(Region *r, size_t d_model, size_t d_ff, size_t heads) {
   TransformerLayer *tlayer = region_alloc(r, sizeof(TransformerLayer));
@@ -1215,135 +1200,96 @@ TransformerLayer* tlayer_alloc(Region *r, size_t d_model, size_t d_ff, size_t he
 
   return tlayer;
 }
+*/
 
-void transformer_backprop(Region *r, Transformer *t, Transformer *grad_t, Matrix *in, Matrix *grad) {
+Matrix* tlayer_backward(Region *r, TransformerLayer *tlayer, Matrix *output, Matrix *input) {
+  // 1. Allocate memory for gradients of LayerNorm parameters
+    tlayer->dgamma2 = matrix_alloc(r, 1, input->cols);
+    matrix_fill(*tlayer->dgamma2, 0.0f);
+    tlayer->dbeta2 = matrix_alloc(r, 1, input->cols);
+    matrix_fill(*tlayer->dbeta2, 0.0f);
+
+    // 2. Layer Norm 2 Backward
+    Matrix *dnorm2_in = layer_norm_backward(r, output, input, tlayer->gamma2, tlayer->dgamma2, tlayer->dbeta2);
+
+    // 3. Feed Forward Backward
+    Matrix *ff_out = feed_forward_backward(r, &tlayer->ff, dnorm2_in, input, tlayer->ff.hidden);
+
+    // 4. Allocate memory for gradients of LayerNorm parameters
+    tlayer->dgamma1 = matrix_alloc(r, 1, input->cols);
+    matrix_fill(*tlayer->dgamma1, 0.0f);
+    tlayer->dbeta1 = matrix_alloc(r, 1, input->cols);
+    matrix_fill(*tlayer->dbeta1, 0.0f);
+
+    // 5. Layer Norm 1 Backward
+    Matrix *dnorm_in = layer_norm_backward(r, ff_out, input, tlayer->gamma1, tlayer->dgamma1, tlayer->dbeta1);
+
+    // 6. Attention Backward
+    Matrix *d_input = attention_backward(r, &tlayer->att, dnorm_in, tlayer->att.Q, tlayer->att.K, tlayer->att.V, tlayer->att.scores);
+
+    return d_input;
+}
+
+void transformer_backprop(Region *r, Transformer *t, Matrix *input, Matrix *grad) {
   printf("transformer backprop\n");
   NN_ASSERT(r != NULL);
   NN_ASSERT(t != NULL);
-  NN_ASSERT(grad_t != NULL);
-  NN_ASSERT(in != NULL);
+  NN_ASSERT(input != NULL);
   NN_ASSERT(grad != NULL);
   
   Matrix *curr_grad = grad;
   printf("Initial grad dims: [%zu x %zu]\n", curr_grad->rows, curr_grad->cols);
 
   for (size_t i = t->layers - 1; i >= 0; i--) {
-    TransformerLayer *tlayer = &(t->tlayers[i]);
-    TransformerLayer *gradlayer = &(grad_t->tlayers[i]);
-    NN_ASSERT(tlayer != NULL);
-    NN_ASSERT(gradlayer != NULL);
-
-    Matrix *dnorm2 = norm_backward(r, curr_grad, tlayer->norm2_input, tlayer->norm2);
-    float mean2 = matrix_mean(*dnorm2);
-    for (size_t j = 0; j < gradlayer->norm2->cols; j++) {
-      MAT_AT(*gradlayer->norm2, 0, j) = mean2;
-    }
-    // printf("dnorm2 dims: [%zu x %zu]\n", dnorm2->rows, dnorm2->cols);
-    // printf("gradlayer->norm2 dims: [%zu x %zu]\n", gradlayer->norm2->rows, gradlayer->norm2->cols);
-    // matrix_copy(*gradlayer->norm2, *dnorm2);
-
-    // Compute transpose of W2.
-    Matrix *W2_T = matrix_alloc(r, tlayer->ff.W2->cols, tlayer->ff.W2->rows);
-    matrix_transpose(*W2_T, *tlayer->ff.W2);
-    // d_hidden = curr_grad dot W2_T
-    Matrix *d_hidden = matrix_alloc(r, tlayer->ff.hidden->rows, tlayer->ff.hidden->cols);
-    matrix_dot(*d_hidden, *curr_grad, *W2_T);
-    // Apply ReLU derivative elementwise.
-    for (size_t m = 0; m < tlayer->ff.hidden->rows; m++) {
-      for (size_t n = 0; n < tlayer->ff.hidden->cols; n++) {
-        float deriv = (MAT_AT(*tlayer->ff.hidden, m, n) > 0) ? 1.0f : 0.0f;
-        MAT_AT(*d_hidden, m, n) *= deriv;
-      }
-    }
-    
-    // Compute gradients for W1 using: dW1 = (input)^T dot d_hidden
-    Matrix *input_T = matrix_alloc(r, tlayer->ff.input->cols, tlayer->ff.input->rows);
-    matrix_transpose(*input_T, *tlayer->ff.input);
-    Matrix *dW1 = matrix_alloc(r, gradlayer->ff.W1->rows, gradlayer->ff.W1->cols);
-    matrix_dot(*dW1, *input_T, *d_hidden);
-    matrix_copy(*gradlayer->ff.W1, *dW1);
-
-    // Compute gradients for W2 using: dW2 = (hidden)^T dot curr_grad
-    Matrix *hidden_T = matrix_alloc(r, tlayer->ff.hidden->cols, tlayer->ff.hidden->rows);
-    matrix_transpose(*hidden_T, *tlayer->ff.hidden);
-    Matrix *dW2 = matrix_alloc(r, gradlayer->ff.W2->rows, gradlayer->ff.W2->cols);
-    matrix_dot(*dW2, *hidden_T, *curr_grad);
-    matrix_copy(*gradlayer->ff.W2, *dW2);
-
-    // dx = d_hidden dot (W1)^T
-    Matrix *W1_T = matrix_alloc(r, tlayer->ff.W1->cols, tlayer->ff.W1->rows);
-    matrix_transpose(*W1_T, *tlayer->ff.W1);
-    Matrix *dx = matrix_alloc(r, d_hidden->rows, W1_T->cols);
-    matrix_dot(*dx, *d_hidden, *W1_T);
-
-    Matrix *dnorm1 = norm_backward(r, dx, tlayer->norm1_input, tlayer->norm1);
-    float mean1 = matrix_mean(*dnorm1);
-    for (size_t j = 0; j < gradlayer->norm1->cols; j++) {
-      MAT_AT(*gradlayer->norm1, 0, j) = mean1;
-    }
-    // printf("dnorm1 dims: [%zu x %zu]\n", dnorm1->rows, dnorm1->cols);
-    // printf("gradlayer->norm1 dims: [%zu x %zu]\n", gradlayer->norm1->rows, gradlayer->norm1->cols);
-    // matrix_copy(*gradlayer->norm1, *dnorm1);
-
-    Matrix *datt = attention_backward(r, &tlayer->att, dnorm1, tlayer->att.Q, tlayer->att.K, 
-      tlayer->att.V, tlayer->att.scores);
-    printf("datt dims: [%zu x %zu]\n", datt->rows, datt->cols);
-    printf("att.Wq: [%zu x %zu]\n", gradlayer->att.Wq->rows, gradlayer->att.Wq->cols);
-    printf("att.Wk: [%zu x %zu]\n", gradlayer->att.Wk->rows, gradlayer->att.Wk->cols);
-    printf("att.Wv: [%zu x %zu]\n", gradlayer->att.Wv->rows, gradlayer->att.Wv->cols);
-    printf("att.Wo: [%zu x %zu]\n", gradlayer->att.Wo->rows, gradlayer->att.Wo->cols);
-    matrix_copy(*gradlayer->att.Wq, *datt);
-    matrix_copy(*gradlayer->att.Wk, *datt);
-    matrix_copy(*gradlayer->att.Wv, *datt);
-    matrix_copy(*gradlayer->att.Wo, *datt);
-
-    curr_grad = datt;
-    printf("Updated curr_grad dims: [%zu x %zu]\n", curr_grad->rows, curr_grad->cols);
+    curr_grad = tlayer_backward(r, &t->tlayers[i], grad, input);
   }
 }
 
 /*
   
 */
-Matrix* norm_backward(Region *r, Matrix *grad, Matrix *x_forward, Matrix *gamma) {
+Matrix* norm_backward(Region *r, Matrix *grad, Matrix *input, Matrix *gamma, Matrix *d_gamma, Matrix *d_beta) {
   printf("norm backward\n");
-  Matrix *dx = matrix_alloc(r, grad->rows, grad->cols);
-  Matrix *d_gamma = matrix_alloc(r, 1, gamma->cols);
 
-  for (size_t i = 0; i < x_forward->rows; i++) {
-    float sum = 0.0f;
-    for (size_t j = 0; j < x_forward->cols; j++) {
-      sum += MAT_AT(*x_forward, i, j);
+  size_t rows = input->rows;
+  size_t cols = input->cols;
+  Matrix *d_input = matrix_alloc(r, rows, cols);
+
+  for (size_t i = 0; i < rows; i++) {
+    float mean = 0.0f;
+    for (size_t j = 0; j < cols; j++) {
+      mean += MAT_AT(*input, i, j);
     }
+    mean /= cols;
 
-    float mean = sum / x_forward->cols;
     float var = 0.0f;
-    for (size_t j = 0; j < x_forward->cols; j++) {
-      float diff = MAT_AT(*x_forward, i, j) - mean;
+    for (size_t j = 0; j < cols; j++) {
+      float diff = MAT_AT(*input, i, j) - mean;
       var += diff * diff;
     }
-    float std = sqrtf(var / x_forward->cols);
+    float std = sqrtf((var / cols) + 1e-6f) ;
 
-    float sum_dnorm = 0.0f;
-    float sum_dnorm_diff = 0.0f;
-    for (size_t j = 0; j < x_forward->cols; j++) {
-      float diff = MAT_AT(*x_forward, i, j) - mean;
-      float dnorm = MAT_AT(*grad, i, j) * MAT_AT(*gamma, 0, j);
-      sum_dnorm += dnorm;
-      sum_dnorm_diff += dnorm * diff;
+    float sum_grad = 0.0f;
+    float sum_grad_diff = 0.0f;
+    for (size_t j = 0; j < cols; j++) {
+      float diff = MAT_AT(*input, i, j) - mean;
+      float dgrad = MAT_AT(*grad, i, j) * MAT_AT(*gamma, 0, j);
+      sum_grad += dgrad;
+      sum_grad_diff += dgrad * diff;
 
-      MAT_AT(*d_gamma, i, j) += MAT_AT(*grad, i, j) * (diff / std);
+      MAT_AT(*d_gamma, 0, j) += MAT_AT(*grad, i, j) * (diff / std);
+      MAT_AT(*d_beta, 0, j) += MAT_AT(*grad, i, j);
     }
 
-    for (size_t j = 0; j < x_forward->cols; j++) {
-      float diff = MAT_AT(*x_forward, i, j) - mean;
-      MAT_AT(*dx, i, j) = MAT_AT(*grad, i, j) * 
-        MAT_AT(*gamma, 0, j) - (sum_dnorm / x_forward->cols) -
-        (diff * sum_dnorm_diff) / (x_forward->cols * std * std * std);
+    for (size_t j = 0; j < cols; j++) {
+      float diff = MAT_AT(*input, i, j) - mean;
+      MAT_AT(*d_input, i, j) = (MAT_AT(*grad, i, j) * 
+        MAT_AT(*gamma, 0, j) / std) - (sum_grad / cols) -
+        (diff * sum_grad_diff / (cols * std * std));
     }
   }
 
-  return dx;
+  return d_input;
 }
 
 
@@ -1357,17 +1303,12 @@ Matrix* ff_backward(Region *r, FeedForward *ff, Matrix *grad, Matrix *input, Mat
   printf("W2: [%zu x %zu]\n", ff->W2->rows, ff->W2->cols);
 
   Matrix *dW2 = matrix_alloc(r, ff->W2->rows, ff->W2->cols);
-  Matrix *dW1 = matrix_alloc(r, ff->W1->rows, ff->W1->cols);
-  Row *db2 = row_alloc(r, ff->b2->cols);
-  Row *db1 = row_alloc(r, ff->b1->cols);
-  Matrix *dx = matrix_alloc(r, input->rows, input->cols);
-
   Matrix *hidden_T = matrix_alloc(r, hidden->cols, hidden->rows);
   printf("hidden_T: [%zu x %zu]\n", hidden_T->rows, hidden_T->cols);
-  printf("hidden: [%zu x %zu]\n", hidden->rows, hidden->cols);
   matrix_transpose(*hidden_T, *hidden);
   matrix_dot(*dW2, *hidden_T, *grad);
 
+  Row *db2 = row_alloc(r, ff->b2->cols);
   for (size_t j = 0; j < grad->cols; j++) {
     float sum = 0.0f;
     for (size_t i = 0; i < grad->rows; i++) {
@@ -1377,116 +1318,109 @@ Matrix* ff_backward(Region *r, FeedForward *ff, Matrix *grad, Matrix *input, Mat
     ROW_AT(*db2, j) = sum;
   }
 
-    Matrix *d_hidden = matrix_alloc(r, hidden->rows, hidden->cols);
-    Matrix *W2_T = matrix_alloc(r, ff->W2->cols, ff->W2->rows);
-    matrix_transpose(*W2_T, *ff->W2);
-    matrix_dot(*d_hidden, *grad, *W2_T);
-    for (size_t i = 0; i < hidden->rows; i++) {
-        for (size_t j = 0; j < hidden->cols; j++) {
-            MAT_AT(*d_hidden, i, j) = (MAT_AT(*hidden, i, j) > 0) ? MAT_AT(*grad, i, j) : 0.0f;
-        }
+  Matrix *d_hidden = matrix_alloc(r, hidden->rows, hidden->cols);
+  Matrix *W2_T = matrix_alloc(r, ff->W2->cols, ff->W2->rows);
+  matrix_transpose(*W2_T, *ff->W2);
+  matrix_dot(*d_hidden, *grad, *W2_T);
+
+  for (size_t i = 0; i < hidden->rows; i++) {
+    for (size_t j = 0; j < hidden->cols; j++) {
+      MAT_AT(*d_hidden, i, j) *= (MAT_AT(*hidden, i, j) > 0) ? 1.0f : 0.0f;
+    }
+  }
+
+  Matrix *dW1 = matrix_alloc(r, ff->W1->rows, ff->W1->cols);
+  Matrix *input_T = matrix_alloc(r, input->cols, input->rows);
+  matrix_transpose(*input_T, *input);
+  printf("input_T: [%zu x %zu]\n", input_T->rows, input_T->cols);
+  matrix_dot(*dW1, *input_T, *d_hidden);
+
+  Row *db1 = row_alloc(r, ff->b1->cols);
+  for (size_t j = 0; j < d_hidden->cols; j++) {
+    float sum = 0.0f;
+    for (size_t i = 0; i < d_hidden->rows; i++) {
+      sum += MAT_AT(*d_hidden, i, j);
     }
 
-    Matrix *input_T = matrix_alloc(r, input->cols, input->rows);
-    matrix_transpose(*input_T, *input);
-    printf("input_T: [%zu x %zu]\n", input_T->rows, input_T->cols);
-    matrix_dot(*dW1, *input_T, *d_hidden);
-    
-    for (size_t j = 0; j < d_hidden->cols; j++) {
-        float sum = 0.0f;
-        for (size_t i = 0; i < d_hidden->rows; i++) {
-            sum += MAT_AT(*d_hidden, i, j);
-        }
-        ROW_AT(*db1, j) = sum;
-    }
-    
-    matrix_add_scaled(ff->W1, dW1, -1);
-    matrix_add_scaled(ff->W2, dW2, -1);
-    row_add(*ff->b1, *db1);
-    row_add(*ff->b2, *db2);
+    ROW_AT(*db1, j) = sum;
+  }
 
-    Matrix *W1_T = matrix_alloc(r, ff->W1->cols, ff->W1->rows);
-    matrix_transpose(*W1_T, *ff->W1);
-    matrix_dot(*dx, *d_hidden, *W1_T);
+  Matrix *d_input = matrix_alloc(r, input->rows, input->cols);
+  Matrix *W1_T = matrix_alloc(r, ff->W1->cols, ff->W1->rows);
+  matrix_transpose(*W1_T, *ff->W1);
+  matrix_dot(*d_input, *d_hidden, *W1_T);
+
+  ff->dW1 = dW1;
+  ff->dW2 = dW2;
+  ff->db1 = db1;
+  ff->db2 = db2;
     
-    return dx;
+  return d_input;
 }
 
 Matrix* attention_backward(Region *r, AttentionHead *mha, Matrix *grad, Matrix *Q, Matrix *K, Matrix *V, Matrix *scores) {
   printf("attention backward\n");
+
+  size_t batch_size = Q->rows;
+  size_t d_model = Q->cols;
+  size_t num_heads = mha->att_heads;
+
   // Recompute concat from the saved scores (as in the forward pass)
-  Matrix *concat = concat_heads(r, mha->scores, mha);
-  
-  // Compute dWo = (concat)^T dot grad.
-  Matrix *concat_T = matrix_alloc(r, concat->cols, concat->rows);
-  matrix_transpose(*concat_T, *concat);
-    
-  // Note: dWo should have the same dimensions as the Wo used in the forward pass.
-  Matrix *dWo = matrix_alloc(r, concat->cols, grad->cols);
-  printf("Computing dWo as concat_T dot grad\n");
-  matrix_dot(*dWo, *concat_T, *grad);
-    
-  // Compute dscores = grad dot (Wo)^T.
-  Matrix *Wo_T = matrix_alloc(r, mha->Wo->cols, mha->Wo->rows);
-  matrix_transpose(*Wo_T, *mha->Wo);
-  Matrix *dscores = matrix_alloc(r, grad->rows, Wo_T->cols);
-  printf("grad * WoT\n");
-  matrix_dot(*dscores, *grad, *Wo_T);
-    
-  softmax_backward(*dscores, *scores);
-    
-  float scale = 1.0f / sqrtf(mha->Wq->cols);
-  matrix_scale(*dscores, scale);
-  
-  // Compute gradient for Q: dQ = dscores dot (K)^T.
-  Matrix *K_T = matrix_alloc(r, K->cols, K->rows);
-  matrix_transpose(*K_T, *K);
-  Matrix *dQ = matrix_alloc(r, dscores->rows, K_T->cols);
-  printf("dscores * KT\n");
-  matrix_dot(*dQ, *dscores, *K_T);
+  Matrix *dconcat = matrix_alloc(r, batch_size, d_model);
+  matrix_dot(*dconcat, *grad, *mha->Wo);
+  Matrix *dscores = concat_heads_backward(r, dconcat, mha);
+  Matrix *dQ_split;
+  Matrix *dK_split;
+  Matrix *dV_split;
+  scaled_dot_product_backward(r, dscores, Q, K, V, &dQ_split, &dK_split, &dV_split);
 
-  // Compute gradient for K: dK = (Q)^T dot dscores.
-  Matrix *Q_T = matrix_alloc(r, Q->cols, Q->rows);
-  matrix_transpose(*Q_T, *Q);
-  Matrix *dK = matrix_alloc(r, Q_T->rows, dscores->cols);
-  printf("QT * dscores\n");
-  matrix_dot(*dK, *Q_T, *dscores);
+  Matrix *dQ = split_heads_backward(r, dQ_split, mha);
+  Matrix *dK = split_heads_backward(r, dK_split, mha);
+  Matrix *dV = split_heads_backward(r, dV_split, mha);
 
-  Matrix *scores_T = matrix_alloc(r, scores->cols, scores->rows);
-  matrix_transpose(*scores_T, *scores);
-  Matrix *dV = matrix_alloc(r, scores_T->rows, grad->cols);
-  printf("scoresT * grad\n");
-  matrix_dot(*dV, *scores_T, *grad);
-  
-  Matrix *dx = matrix_alloc(r, grad->rows, grad->cols);
-  printf("dx + dQ\n");
-  matrix_add(*dx, *dQ);
-  printf("dx + dK\n");
-  matrix_add(*dx, *dK);
-  printf("dx + dV\n");
-  matrix_add(*dx, *dV);
+  Matrix *d_input = matrix_alloc(r, batch_size, d_model);
+  Matrix *Wq_T = matrix_alloc(r, mha->Wq->cols, mha->Wq->rows);
+  matrix_transpose(*Wq_T, *mha->Wq);
+  matrix_dot(*d_input, *dQ, *Wq_T);
+
+  Matrix *Wk_T = matrix_alloc(r, mha->Wk->cols, mha->Wk->rows);
+  matrix_transpose(*Wk_T, *mha->Wk);
+  matrix_dot(*d_input, *dK, *Wk_T);
+
+  Matrix *Wv_T = matrix_alloc(r, mha->Wv->cols, mha->Wv->rows);
+  matrix_transpose(*Wv_T, *mha->Wv);
+  matrix_dot(*d_input, *dV, *Wv_T);
+
+  mha->dWq = matrix_alloc(r, mha->Wq->rows, mha->Wq->cols);
+  matrix_dot(*mha->dWq, *d_input, *Q);
+  mha->dWk = matrix_alloc(r, mha->Wk->rows, mha->Wk->cols);
+  matrix_dot(*mha->dWk, *d_input, *K);
+  mha->dWv = matrix_alloc(r, mha->Wv->rows, mha->Wv->cols);
+  matrix_dot(*mha->dWv, *d_input, *V);
+  mha->dWo = matrix_alloc(r, mha->Wo->rows, mha->Wo->cols);
+  matrix_dot(*mha->dWo, *dconcat, *scores);
     
-  matrix_copy(*mha->Wq, *dQ);
-  matrix_copy(*mha->Wk, *dK);
-  matrix_copy(*mha->Wv, *dV);
-  matrix_copy(*mha->Wo, *dWo);
-    
-  return dx;
+  return d_input;
 }
 
-void transformer_learn(Transformer *t, Transformer *grad_t, float lr) {
+void transformer_learn(Transformer *t, float lr) {
   printf("learning..\n");
   for (size_t i = 0; i < t->layers; i++) {
-    matrix_add_scaled(t->tlayers[i].att.Wq, grad_t->tlayers[i].att.Wq, -lr);
-    matrix_add_scaled(t->tlayers[i].att.Wk, grad_t->tlayers[i].att.Wk, -lr);
-    matrix_add_scaled(t->tlayers[i].att.Wv, grad_t->tlayers[i].att.Wv, -lr);
-    matrix_add_scaled(t->tlayers[i].att.Wo, grad_t->tlayers[i].att.Wo, -lr);
+    matrix_add_scaled(t->tlayers[i].att.Wq, t->tlayers[i].att.dWq, lr);
+    matrix_add_scaled(t->tlayers[i].att.Wk, t->tlayers[i].att.dWk, lr);
+    matrix_add_scaled(t->tlayers[i].att.Wv, t->tlayers[i].att.dWv, lr);
+    matrix_add_scaled(t->tlayers[i].att.Wo, t->tlayers[i].att.dWo, lr);
 
-    matrix_add_scaled(t->tlayers[i].ff.W1, grad_t->tlayers[i].ff.W1, -lr);
-    matrix_add_scaled(t->tlayers[i].ff.W2, grad_t->tlayers[i].ff.W2, -lr);
+    matrix_add_scaled(t->tlayers[i].ff.W1, t->tlayers[i].ff.dW1, lr);
+    matrix_add_scaled(t->tlayers[i].ff.W2, t->tlayers[i].ff.dW2, lr);
 
-    row_add_scaled(t->tlayers[i].ff.b1, grad_t->tlayers[i].ff.b1, -lr);
-    row_add_scaled(t->tlayers[i].ff.b2, grad_t->tlayers[i].ff.b2, -lr);
+    row_add_scaled(t->tlayers[i].ff.b1, t->tlayers[i].ff.db1, lr);
+    row_add_scaled(t->tlayers[i].ff.b2, t->tlayers[i].ff.db2, lr);
+
+    matrix_add_scaled(t->tlayers[i].gamma1, t->tlayers[i].dgamma1, lr);
+    matrix_add_scaled(t->tlayers[i].gamma2, t->tlayers[i].dgamma2, lr);
+    matrix_add_scaled(t->tlayers[i].beta1, t->tlayers[i].dbeta1, lr);
+    matrix_add_scaled(t->tlayers[i].beta2, t->tlayers[i].dbeta2, lr);
   }
 }
 

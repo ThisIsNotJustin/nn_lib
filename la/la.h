@@ -20,6 +20,7 @@ Matrix* scaled_dot_product(Region *r, Matrix *Q, Matrix *K, Matrix *V);
 float matrix_variance(Matrix *m, float mean);
 void matrix_add_scaled(Matrix *a, Matrix *b, float scale);
 void row_add_scaled(Row *a, Row *b, float scale);
+Matrix* layer_norm(Region *r, Matrix *input, Matrix *gamma, Matrix *beta);
 
 void softmax(Matrix m);
 
@@ -360,6 +361,27 @@ void row_add_scaled(Row *a, Row *b, float scale) {
   for (size_t j = 0; j < a->cols; j++) {
     ROW_AT(*a, j) += ROW_AT(*b, j) * scale;
   }
+}
+
+Matrix* layer_norm(Region *r, Matrix *input, Matrix *gamma, Matrix *beta) {
+  size_t rows = input->rows;
+  size_t cols = input->cols;
+  Matrix *output = matrix_alloc(r, rows, cols);
+
+  float mean = 0.0f;
+  mean = matrix_mean(*input);
+  float var = 0.0f;
+  var = matrix_variance(input, mean);
+
+  for (size_t i = 0; i < rows; i++) {
+    float std = sqrtf(var + 1e-6f);
+    for (size_t j = 0; j < cols; j++) {
+      float norm = (MAT_AT(*input, i, j) - mean) / std;
+      MAT_AT(*output, i, j) = norm * MAT_AT(*gamma, 0, j) + MAT_AT(*beta, 0, j);
+    }
+  }
+
+  return output;
 }
 
 #endif // LA_IMPLEMENTATION
