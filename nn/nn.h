@@ -960,6 +960,9 @@ Matrix* attention_forward(Region *r, AttentionHead *mha, Matrix *input) {
   matrix_dot(*Q, *input, *(mha->Wq));
   matrix_dot(*K, *input, *(mha->Wk));
   matrix_dot(*V, *input, *(mha->Wv));
+  mha->Q = Q;
+  mha->K = K;
+  mha->V = V;
 
   size_t d_head = d_model / num_heads;
   Matrix *Q_split = split_heads(r, Q, mha);
@@ -967,6 +970,7 @@ Matrix* attention_forward(Region *r, AttentionHead *mha, Matrix *input) {
   Matrix *V_split = split_heads(r, V, mha);
 
   Matrix *scores = scaled_dot_product(r, Q_split, K_split, V_split);
+  mha->scores = scores;
   Matrix *concat = concat_heads(r, scores, mha);
   Matrix *output = matrix_alloc(r, batch_size, d_model);
   matrix_dot(*output, *concat, *(mha->Wo));
@@ -989,6 +993,7 @@ Matrix* feed_forward(Region *r, FeedForward *ff, Matrix *input) {
   matrix_dot(*hidden, *input, *(ff->W1));
   add_bias(*hidden, *ff->b1);
   matrix_act(*hidden, RELU);
+  ff->hidden = hidden;
 
   Matrix *output = matrix_alloc(r, hidden->rows, ff->W2->cols);
   matrix_dot(*output, *hidden, *(ff->W2));
@@ -1432,11 +1437,16 @@ Matrix* attention_backward(Region *r, AttentionHead *mha, Matrix *grad, Matrix *
 
   // Recompute concat from the saved scores (as in the forward pass)
   Matrix *dconcat = matrix_alloc(r, batch_size, d_model);
-  matrix_dot(*dconcat, *grad, *mha->Wo);
+  Matrix *Wo_T = matrix_alloc(r, mha->Wo->cols, mha->Wo->rows);
+  matrix_transpose(*Wo_T, *mha->Wo);
+  printf("dconcat: %zux%zu, grad: %zux%zu, Wo_T: %zux%zu\n", dconcat->cols, dconcat->rows, grad->cols, grad->rows, Wo_T->cols, Wo_T->rows);
+  matrix_dot(*dconcat, *grad, *Wo_T);
+
   Matrix *dscores = concat_heads_backward(r, dconcat, mha);
   Matrix *dQ_split;
   Matrix *dK_split;
   Matrix *dV_split;
+  printf("scaled dot back\n");
   scaled_dot_product_backward(r, dscores, Q, K, V, &dQ_split, &dK_split, &dV_split);
 
   Matrix *dQ = split_heads_backward(r, dQ_split, mha);
@@ -1446,23 +1456,49 @@ Matrix* attention_backward(Region *r, AttentionHead *mha, Matrix *grad, Matrix *
   Matrix *d_input = matrix_alloc(r, batch_size, d_model);
   Matrix *Wq_T = matrix_alloc(r, mha->Wq->cols, mha->Wq->rows);
   matrix_transpose(*Wq_T, *mha->Wq);
+  printf("d_input: %zux%zu, dQ: %zux%zu, Wq_T: %zux%zu\n", d_input->cols, d_input->rows, dQ->cols, dQ->rows, Wq_T->cols, Wq_T->rows);
   matrix_dot(*d_input, *dQ, *Wq_T);
 
   Matrix *Wk_T = matrix_alloc(r, mha->Wk->cols, mha->Wk->rows);
   matrix_transpose(*Wk_T, *mha->Wk);
+  printf("d_input: %zux%zu, dK: %zux%zu, Wk_T: %zux%zu\n", d_input->cols, d_input->rows, dK->cols, dK->rows, Wk_T->cols, Wk_T->rows);
   matrix_dot(*d_input, *dK, *Wk_T);
 
   Matrix *Wv_T = matrix_alloc(r, mha->Wv->cols, mha->Wv->rows);
   matrix_transpose(*Wv_T, *mha->Wv);
+  printf("d_input: %zux%zu, dV: %zux%zu, Wv_T: %zux%zu\n", d_input->cols, d_input->rows, dV->cols, dV->rows, Wv_T->cols, Wv_T->rows);
   matrix_dot(*d_input, *dV, *Wv_T);
 
+  // dimensional issues begin here
+  /*
+    mha->dWq: 8x8, d_input: 8x40, Q_T: 40x8
+    dst.cols: 8 dst.rows: 8
+    a.cols: 8 a.rows: 40
+    b.cols: 40 b.rows: 8
+    Assertion failed: (dst.rows == a.rows),
+  */
   mha->dWq = matrix_alloc(r, mha->Wq->rows, mha->Wq->cols);
-  matrix_dot(*mha->dWq, *d_input, *Q);
+  Matrix *Q_T = matrix_alloc(r, Q->cols, Q->rows);
+  matrix_transpose(*Q_T, *Q);
+  printf("mha->dWq: %zux%zu, d_input: %zux%zu, Q_T: %zux%zu\n", mha->dWq->cols, mha->dWq->rows, d_input->cols, d_input->rows, Q_T->cols, Q_T->rows);
+  matrix_dot(*mha->dWq, *d_input, *Q_T);
+
   mha->dWk = matrix_alloc(r, mha->Wk->rows, mha->Wk->cols);
-  matrix_dot(*mha->dWk, *d_input, *K);
+  Matrix *K_T = matrix_alloc(r, K->cols, K->rows);
+  matrix_transpose(*K_T, *K);
+  printf("mha->dWk: %zux%zu, d_input: %zux%zu, K_T: %zux%zu\n", mha->dWk->cols, mha->dWk->rows, d_input->cols, d_input->rows, K_T->cols, K_T->rows);
+  matrix_dot(*mha->dWk, *d_input, *K_T);
+
   mha->dWv = matrix_alloc(r, mha->Wv->rows, mha->Wv->cols);
-  matrix_dot(*mha->dWv, *d_input, *V);
+  Matrix *V_T = matrix_alloc(r, V->cols, V->rows);
+  matrix_transpose(*V_T, *V);
+  printf("mha->dWv: %zux%zu, d_input: %zux%zu, V_T: %zux%zu\n", mha->dWv->cols, mha->dWv->rows, d_input->cols, d_input->rows, V_T->cols, V_T->rows);
+  matrix_dot(*mha->dWv, *d_input, *V_T);
+  
   mha->dWo = matrix_alloc(r, mha->Wo->rows, mha->Wo->cols);
+  printf("mha->dWo: %zux%zu, dconcat: %zux%zu, scores: %zux%zu\n", mha->dWo->cols, mha->dWo->rows, dconcat->cols, dconcat->rows, scores->cols, scores->rows);
+  // Matrix *Q_T = matrix_alloc(r, Q->cols, Q->rows);
+  // matrix_transpose(*Q_T, *Q);
   matrix_dot(*mha->dWo, *dconcat, *scores);
     
   return d_input;
@@ -1494,30 +1530,51 @@ void scaled_dot_product_backward(Region *r, Matrix *grad, Matrix *Q, Matrix *K, 
   size_t batch_size = Q->rows;
   size_t d_k = K->cols;
 
-  // 1. Compute softmax gradient
-  Matrix *attention_weights = matrix_alloc(r, Q->rows, K->cols);
-  matrix_dot(*attention_weights, *Q, *K);
-  matrix_scale(*attention_weights, 1.0f / sqrtf(d_k));
-  softmax(*attention_weights);
+  // 1. Recompute S = softmax((Q * K^T) / sqrt(d_k))
+  // K_T: [d_k x batch]
+  Matrix *K_T = matrix_alloc(r, K->cols, K->rows);
+  matrix_transpose(*K_T, *K);
 
-  Matrix *softmax_grad = matrix_alloc(r, attention_weights->rows, attention_weights->cols);
-  softmax_derivative(softmax_grad, attention_weights);
+  // S should be [batch x batch]
+  Matrix *S = matrix_alloc(r, Q->rows, K->rows);
+  matrix_dot(*S, *Q, *K_T);
+  matrix_scale(*S, 1.0f / sqrtf(d_k));
+  softmax(*S); // Now S is [batch x batch]
 
-  // 2. Compute dV
+  // 2. Backprop for dV:
+  // Forward output = S * V, so:
+  // dV = S^T * grad
+  Matrix *S_T = matrix_alloc(r, S->cols, S->rows);
+  matrix_transpose(*S_T, *S);
   *dV = matrix_alloc(r, V->rows, V->cols);
-  matrix_dot(**dV, *softmax_grad, *grad);
+  matrix_dot(**dV, *S_T, *grad);
 
-  // 3. Compute dK
-  Matrix *grad_output_V_T = matrix_alloc(r, grad->cols, V->rows);
-  matrix_transpose(*grad_output_V_T, *grad);
-  *dK = matrix_alloc(r, K->rows, K->cols);
-  matrix_dot(**dK, *grad_output_V_T, *Q);
+  // 3. Compute dS:
+  // dS = grad * V^T  (since output = S * V)
+  Matrix *V_T = matrix_alloc(r, V->cols, V->rows);
+  matrix_transpose(*V_T, *V);
+  Matrix *dS = matrix_alloc(r, grad->rows, V_T->cols); // [batch x batch]
+  matrix_dot(*dS, *grad, *V_T);
 
-  // 4. Compute dQ
-  Matrix *grad_output_K_T = matrix_alloc(r, grad->cols, K->rows);
-  matrix_transpose(*grad_output_K_T, *K);
+  // 4. Backprop through softmax:
+  // This function adjusts dS in-place using S.
+  softmax_backward(*dS, *S); 
+  // Now, dS holds the gradient with respect to X where X = (Q*K^T)/sqrt(d_k)
+
+  // 5. Compute dQ:
+  // dX = dS, and X = (Q * K^T) / sqrt(d_k)
+  // So, dQ = dX * K  scaled by 1/sqrt(d_k)
   *dQ = matrix_alloc(r, Q->rows, Q->cols);
-  matrix_dot(**dQ, *grad_output_K_T, *grad);
+  matrix_dot(**dQ, *dS, *K);
+  matrix_scale(**dQ, 1.0f / sqrtf(d_k));
+
+  // 6. Compute dK:
+  // dK = dX^T * Q  scaled by 1/sqrt(d_k)
+  Matrix *dS_T = matrix_alloc(r, dS->cols, dS->rows);
+  matrix_transpose(*dS_T, *dS);
+  *dK = matrix_alloc(r, K->rows, K->cols);
+  matrix_dot(**dK, *dS_T, *Q);
+  matrix_scale(**dK, 1.0f / sqrtf(d_k));
 }
 
 #endif // NN_IMPLEMENTATION
