@@ -299,8 +299,14 @@ Matrix* attention_backward(Region *r, AttentionHead *mha, Matrix *grad, Matrix *
 void transformer_learn(Transformer *t, float lr);
 
 Matrix* split_heads(Region *r, Matrix *m, AttentionHead *mha);
+Matrix* split_heads_backward(Region *r, Matrix *m, AttentionHead *mha);
 Matrix* concat_heads(Region *r, Matrix *m, AttentionHead *mha);
+Matrix* concat_heads_backward(Region *r, Matrix *m, AttentionHead *mha);
 void add_bias(Matrix m, Row b);
+void softmax_derivative(Matrix *dst, Matrix *softmax_output);
+
+// this is a monstrosity, needs fixed
+void scaled_dot_product_backward(Region *r, Matrix *grad, Matrix *Q, Matrix *K, Matrix *V, Matrix **dQ, Matrix **dK, Matrix **dV);
 
 #endif // NN_H_
 
@@ -1061,16 +1067,36 @@ Matrix* transformer_forward(Region *r, Transformer *t, Matrix *input) {
   Returns:
     Matrix with Attention Heads concatenated along rows
 */
-Matrix* split_heads(Region *r, Matrix *m, AttentionHead *mha) {
+Matrix* split_heads(Region *r, Matrix *grad_split, AttentionHead *mha) {
   printf("split\n");
-  NN_ASSERT(m->cols % mha->att_heads == 0);
-  size_t d = m->cols / mha->att_heads;
+  NN_ASSERT(grad_split->cols % mha->att_heads == 0);
+  size_t d = grad_split->cols / mha->att_heads;
 
-  Matrix *result = matrix_alloc(r, m->rows * mha->att_heads, d);
-  for (size_t i = 0; i < m->rows; i++) {
+  Matrix *result = matrix_alloc(r, grad_split->rows * mha->att_heads, d);
+  for (size_t i = 0; i < grad_split->rows; i++) {
     for (size_t j = 0; j < mha->att_heads; j++) {
       for (size_t k = 0; k < d; k++) {
-        MAT_AT(*result, i * mha->att_heads + j, k) = MAT_AT(*m, i, j * d + k);
+        MAT_AT(*result, i * mha->att_heads + j, k) = MAT_AT(*grad_split, i, j * d + k);
+      }
+    }
+  }
+
+  return result;
+}
+
+Matrix* split_heads_backward(Region *r, Matrix *grad_split, AttentionHead *mha) {
+  printf("split backward\n");
+
+  size_t batch_size = grad_split->rows / mha->att_heads;
+  size_t d_model = grad_split->cols * mha->att_heads;
+  size_t num_heads = mha->att_heads;
+  size_t d_head = grad_split->cols;
+
+  Matrix *result = matrix_alloc(r, batch_size, d_model);
+  for (size_t i = 0; i < batch_size; i++) {
+    for (size_t j = 0; j < num_heads; j++) {
+      for (size_t k = 0; k < d_head; k++) {
+        MAT_AT(*result, i, j * d_head + k) = MAT_AT(*grad_split, i * num_heads + j, k);
       }
     }
   }
@@ -1106,6 +1132,26 @@ Matrix* concat_heads(Region *r, Matrix *m, AttentionHead *mha) {
   return result;
 }
 
+Matrix* concat_heads_backward(Region *r, Matrix *m, AttentionHead *mha) {
+  printf("concat\n");
+
+  size_t batch_size = m->rows;
+  size_t d_model = m->cols;
+  size_t num_heads = mha->att_heads;
+  size_t d_head = d_model / num_heads;
+
+  Matrix *result = matrix_alloc(r, batch_size * num_heads, d_head);
+  for (size_t i = 0; i < batch_size; i++) {
+    for (size_t j = 0; j < num_heads; j++) {
+      for (size_t k = 0; k < d_head; k++) {
+        MAT_AT(*result, i * num_heads + j, k) = MAT_AT(*m, i, j * d_head + k);
+      }
+    }
+  }
+
+  return result;
+}
+
 /*
   Add bias Row Vector to a Matrix
 
@@ -1134,6 +1180,23 @@ void softmax_backward(Matrix grad, Matrix probs) {
     
     for (size_t j = 0; j < grad.cols; j++) {
       MAT_AT(grad, i, j) -= sum * MAT_AT(probs, i, j);
+    }
+  }
+}
+
+void softmax_derivative(Matrix *dst, Matrix *softmax_output) {
+  NN_ASSERT(dst->rows == softmax_output->rows);
+  NN_ASSERT(dst->cols == softmax_output->cols);
+
+  size_t rows = dst->rows;
+  size_t cols = dst->cols;
+  for (size_t i = 0; i < rows; i++) {
+    for (size_t j = 0; j < cols; j++) {
+      float softmax_i = MAT_AT(*softmax_output, i, j);
+      float derivative = i == j ? softmax_i * (1.0f - softmax_i) :
+        softmax_i * (0.0f - softmax_i);
+
+      MAT_AT(*dst, i, j) = derivative;
     }
   }
 }
@@ -1210,10 +1273,10 @@ Matrix* tlayer_backward(Region *r, TransformerLayer *tlayer, Matrix *output, Mat
     matrix_fill(*tlayer->dbeta2, 0.0f);
 
     // 2. Layer Norm 2 Backward
-    Matrix *dnorm2_in = layer_norm_backward(r, output, input, tlayer->gamma2, tlayer->dgamma2, tlayer->dbeta2);
+    Matrix *dnorm2_in = norm_backward(r, output, input, tlayer->gamma2, tlayer->dgamma2, tlayer->dbeta2);
 
     // 3. Feed Forward Backward
-    Matrix *ff_out = feed_forward_backward(r, &tlayer->ff, dnorm2_in, input, tlayer->ff.hidden);
+    Matrix *ff_out = ff_backward(r, &tlayer->ff, dnorm2_in, input, tlayer->ff.hidden);
 
     // 4. Allocate memory for gradients of LayerNorm parameters
     tlayer->dgamma1 = matrix_alloc(r, 1, input->cols);
@@ -1222,7 +1285,7 @@ Matrix* tlayer_backward(Region *r, TransformerLayer *tlayer, Matrix *output, Mat
     matrix_fill(*tlayer->dbeta1, 0.0f);
 
     // 5. Layer Norm 1 Backward
-    Matrix *dnorm_in = layer_norm_backward(r, ff_out, input, tlayer->gamma1, tlayer->dgamma1, tlayer->dbeta1);
+    Matrix *dnorm_in = norm_backward(r, ff_out, input, tlayer->gamma1, tlayer->dgamma1, tlayer->dbeta1);
 
     // 6. Attention Backward
     Matrix *d_input = attention_backward(r, &tlayer->att, dnorm_in, tlayer->att.Q, tlayer->att.K, tlayer->att.V, tlayer->att.scores);
@@ -1244,6 +1307,8 @@ void transformer_backprop(Region *r, Transformer *t, Matrix *input, Matrix *grad
     curr_grad = tlayer_backward(r, &t->tlayers[i], grad, input);
   }
 }
+
+
 
 /*
   
@@ -1405,6 +1470,7 @@ Matrix* attention_backward(Region *r, AttentionHead *mha, Matrix *grad, Matrix *
 
 void transformer_learn(Transformer *t, float lr) {
   printf("learning..\n");
+
   for (size_t i = 0; i < t->layers; i++) {
     matrix_add_scaled(t->tlayers[i].att.Wq, t->tlayers[i].att.dWq, lr);
     matrix_add_scaled(t->tlayers[i].att.Wk, t->tlayers[i].att.dWk, lr);
@@ -1422,6 +1488,36 @@ void transformer_learn(Transformer *t, float lr) {
     matrix_add_scaled(t->tlayers[i].beta1, t->tlayers[i].dbeta1, lr);
     matrix_add_scaled(t->tlayers[i].beta2, t->tlayers[i].dbeta2, lr);
   }
+}
+
+void scaled_dot_product_backward(Region *r, Matrix *grad, Matrix *Q, Matrix *K, Matrix *V, Matrix **dQ, Matrix **dK, Matrix **dV) {
+  size_t batch_size = Q->rows;
+  size_t d_k = K->cols;
+
+  // 1. Compute softmax gradient
+  Matrix *attention_weights = matrix_alloc(r, Q->rows, K->cols);
+  matrix_dot(*attention_weights, *Q, *K);
+  matrix_scale(*attention_weights, 1.0f / sqrtf(d_k));
+  softmax(*attention_weights);
+
+  Matrix *softmax_grad = matrix_alloc(r, attention_weights->rows, attention_weights->cols);
+  softmax_derivative(softmax_grad, attention_weights);
+
+  // 2. Compute dV
+  *dV = matrix_alloc(r, V->rows, V->cols);
+  matrix_dot(**dV, *softmax_grad, *grad);
+
+  // 3. Compute dK
+  Matrix *grad_output_V_T = matrix_alloc(r, grad->cols, V->rows);
+  matrix_transpose(*grad_output_V_T, *grad);
+  *dK = matrix_alloc(r, K->rows, K->cols);
+  matrix_dot(**dK, *grad_output_V_T, *Q);
+
+  // 4. Compute dQ
+  Matrix *grad_output_K_T = matrix_alloc(r, grad->cols, K->rows);
+  matrix_transpose(*grad_output_K_T, *K);
+  *dQ = matrix_alloc(r, Q->rows, Q->cols);
+  matrix_dot(**dQ, *grad_output_K_T, *grad);
 }
 
 #endif // NN_IMPLEMENTATION
